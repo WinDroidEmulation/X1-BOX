@@ -79,6 +79,7 @@ class MainActivity : SDLActivity(), InputManager.InputDeviceListener {
       startupSnapshotSlot = requestedSlot
     }
     showFpsCounter = isFpsCounterEnabled()
+    nativeSetFpsCounterEnabled(showFpsCounter)
     setupOnScreenController()
     if (showFpsCounter) {
       setupFpsCounter()
@@ -179,6 +180,7 @@ class MainActivity : SDLActivity(), InputManager.InputDeviceListener {
       if (showFpsCounter && fpsCounterView == null) {
         setupFpsCounter()
       }
+      nativeSetFpsCounterEnabled(showFpsCounter)
       return
     }
 
@@ -193,6 +195,7 @@ class MainActivity : SDLActivity(), InputManager.InputDeviceListener {
       }
       fpsCounterView = null
     }
+    nativeSetFpsCounterEnabled(showFpsCounter)
   }
 
   private fun setupFpsCounter() {
@@ -285,6 +288,7 @@ class MainActivity : SDLActivity(), InputManager.InputDeviceListener {
 
   override fun onPause() {
     stopFpsUpdates()
+    nativeSetFpsCounterEnabled(false)
     super.onPause()
   }
 
@@ -408,6 +412,7 @@ class MainActivity : SDLActivity(), InputManager.InputDeviceListener {
     
     inputManager?.unregisterInputDeviceListener(this)
     fpsCounterView = null
+    nativeSetFpsCounterEnabled(false)
     super.onDestroy()
   }
 
@@ -484,6 +489,7 @@ class MainActivity : SDLActivity(), InputManager.InputDeviceListener {
   private external fun nativeSaveSnapshot(name: String): Boolean
   private external fun nativeLoadSnapshot(name: String): Boolean
   private external fun nativeGetFps(): Float
+  private external fun nativeSetFpsCounterEnabled(enabled: Boolean)
 
   private fun slotName(slot: Int) = "android_slot_$slot"
 

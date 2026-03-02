@@ -7,6 +7,7 @@
 #include "xemu-xbe.h"
 
 #include <SDL.h>
+#include <SDL_atomic.h>
 #include <SDL_system.h>
 #include <GLES3/gl3.h>
 #include <android/log.h>
@@ -21,6 +22,8 @@ const char **g_snapshot_shortcut_index_key_map[] = { NULL };
 static bool xemu_snapshots_dirty = true;
 static GLuint g_snapshot_display_tex = 0;
 static bool g_snapshot_display_flip = false;
+static SDL_atomic_t g_snapshot_pending = { 0 };
+static SDL_atomic_t g_fps_counter_enabled = { 0 };
 
 #define SNAPSHOT_PREVIEW_WIDTH  320
 #define SNAPSHOT_PREVIEW_HEIGHT 240
@@ -397,6 +400,20 @@ static struct {
     .lock = PTHREAD_MUTEX_INITIALIZER,
 };
 
+static void set_fps_counter_enabled(bool enabled)
+{
+    SDL_AtomicSet(&g_fps_counter_enabled, enabled ? 1 : 0);
+
+    if (!enabled) {
+        pthread_mutex_lock(&g_fps_state.lock);
+        g_fps_state.window_start_ms = 0;
+        g_fps_state.last_frame_ms = 0;
+        g_fps_state.frame_count = 0;
+        g_fps_state.fps = 0.0f;
+        pthread_mutex_unlock(&g_fps_state.lock);
+    }
+}
+
 static void update_android_fps_counter(void)
 {
     const uint64_t now_ms = (uint64_t)SDL_GetTicks64();
@@ -423,13 +440,20 @@ static void update_android_fps_counter(void)
 
 void xemu_android_process_snapshot_request(void)
 {
-    update_android_fps_counter();
+    if (SDL_AtomicGet(&g_fps_counter_enabled) != 0) {
+        update_android_fps_counter();
+    }
+
+    if (SDL_AtomicGet(&g_snapshot_pending) == 0) {
+        return;
+    }
 
     if (pthread_mutex_trylock(&g_snap_req.lock) != 0) {
         return;
     }
 
     if (!g_snap_req.pending) {
+        SDL_AtomicSet(&g_snapshot_pending, 0);
         pthread_mutex_unlock(&g_snap_req.lock);
         return;
     }
@@ -454,6 +478,7 @@ void xemu_android_process_snapshot_request(void)
     }
 
     g_snap_req.pending = false;
+    SDL_AtomicSet(&g_snapshot_pending, 0);
     g_snap_req.done = true;
     pthread_cond_signal(&g_snap_req.cond);
     pthread_mutex_unlock(&g_snap_req.lock);
@@ -466,6 +491,7 @@ static jboolean dispatch_snapshot(JNIEnv *env, jstring jname, SnapOpType type)
     pthread_mutex_lock(&g_snap_req.lock);
     g_snap_req.type = type;
     g_snap_req.pending = true;
+    SDL_AtomicSet(&g_snapshot_pending, 1);
     g_snap_req.done = false;
     strncpy(g_snap_req.name, name, sizeof(g_snap_req.name) - 1);
     g_snap_req.name[sizeof(g_snap_req.name) - 1] = '\0';
@@ -501,6 +527,10 @@ JNIEXPORT jfloat JNICALL
 Java_com_izzy2lost_x1box_MainActivity_nativeGetFps(
         JNIEnv *env, jobject obj)
 {
+    if (SDL_AtomicGet(&g_fps_counter_enabled) == 0) {
+        return 0.0f;
+    }
+
     float fps = 0.0f;
     const uint64_t now_ms = (uint64_t)SDL_GetTicks64();
     (void)env;
@@ -519,4 +549,13 @@ Java_com_izzy2lost_x1box_MainActivity_nativeGetFps(
     }
 
     return (jfloat)fps;
+}
+
+JNIEXPORT void JNICALL
+Java_com_izzy2lost_x1box_MainActivity_nativeSetFpsCounterEnabled(
+        JNIEnv *env, jobject obj, jboolean enabled)
+{
+    (void)env;
+    (void)obj;
+    set_fps_counter_enabled(enabled == JNI_TRUE);
 }
