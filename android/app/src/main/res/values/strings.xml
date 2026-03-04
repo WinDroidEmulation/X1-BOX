@@ -92,6 +92,10 @@
   <string name="settings_frame_rate_limit">Frame Rate Limit</string>
   <string name="settings_frame_rate_limit_30">30 FPS</string>
   <string name="settings_frame_rate_limit_60">60 FPS</string>
+  <string name="settings_system_memory">System Memory</string>
+  <string name="settings_system_memory_64">64 MiB (Default)</string>
+  <string name="settings_system_memory_128">128 MiB (Debug/Homebrew)</string>
+  <string name="settings_system_memory_hint">Use 64 MiB for retail games. 128 MiB is mainly for debug/homebrew and may reduce compatibility.</string>
   <string name="settings_resolution_scale">Internal Resolution Scale</string>
   <string name="settings_resolution_scale_1x">1x (Native 480p)</string>
   <string name="settings_resolution_scale_2x">2x (960p)</string>

@@ -41,6 +41,7 @@ class SettingsActivity : AppCompatActivity() {
     val btn3x             = findViewById<MaterialButton>(R.id.btn_scale_3x)
     val toggleDisplayMode = findViewById<MaterialButtonToggleGroup>(R.id.toggle_display_mode)
     val toggleFrameRate   = findViewById<MaterialButtonToggleGroup>(R.id.toggle_frame_rate)
+    val toggleSystemMemory = findViewById<MaterialButtonToggleGroup>(R.id.toggle_system_memory)
     val toggleThread      = findViewById<MaterialButtonToggleGroup>(R.id.toggle_tcg_thread)
     val btnMulti          = findViewById<MaterialButton>(R.id.btn_thread_multi)
     val btnSingle         = findViewById<MaterialButton>(R.id.btn_thread_single)
@@ -74,6 +75,12 @@ class SettingsActivity : AppCompatActivity() {
     when (frameRateLimit) {
       30   -> toggleFrameRate.check(R.id.btn_fps_30)
       else -> toggleFrameRate.check(R.id.btn_fps_60)
+    }
+
+    val systemMemoryMiB = prefs.getInt("setting_system_memory_mib", 64)
+    when (systemMemoryMiB) {
+      128  -> toggleSystemMemory.check(R.id.btn_memory_128)
+      else -> toggleSystemMemory.check(R.id.btn_memory_64)
     }
 
     tvVulkanDriverName.text =
@@ -132,6 +139,10 @@ class SettingsActivity : AppCompatActivity() {
         R.id.btn_thread_single -> "single"
         else                   -> "multi"
       }
+      val selectedSystemMemoryMiB = when (toggleSystemMemory.checkedButtonId) {
+        R.id.btn_memory_128 -> 128
+        else                -> 64
+      }
       val selectedAudioDriver = when (toggleAudioDriver.checkedButtonId) {
         R.id.btn_audio_aaudio    -> "aaudio"
         R.id.btn_audio_disabled  -> "dummy"
@@ -142,6 +153,7 @@ class SettingsActivity : AppCompatActivity() {
         .putInt("setting_display_mode", selectedDisplayMode)
         .putInt("setting_surface_scale", selectedScale)
         .putInt("setting_frame_rate_limit", selectedFrameRate)
+        .putInt("setting_system_memory_mib", selectedSystemMemoryMiB)
         .putString("setting_tcg_thread", selectedThread)
         .putBoolean("setting_use_dsp", switchDsp.isChecked)
         .putBoolean("setting_hrtf", switchHrtf.isChecked)

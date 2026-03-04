@@ -576,6 +576,7 @@ cleanup:
 struct EmulatorSettings {
   int surface_scale    = 1;         // 1, 2, or 3
   int frame_rate_limit = 60;        // 30 or 60
+  int system_memory_mib = 64;       // 64 or 128
   std::string tcg_thread = "multi"; // "single" or "multi"
   bool use_dsp         = false;
   bool hrtf            = true;
@@ -686,6 +687,8 @@ static bool WriteConfigToml(const std::string& config_path,
   if (!android->contains("audio_driver")) {
     android->insert_or_assign("audio_driver", "openslES");
   }
+  sys->insert_or_assign(
+      "mem_limit", settings.system_memory_mib == 128 ? "128" : "64");
 
   files->insert_or_assign("bootrom_path", mcpx);
   files->insert_or_assign("flashrom_path", flash);
@@ -805,6 +808,12 @@ static SetupFiles SyncSetupFiles() {
   if (emuSettings.frame_rate_limit != 30 &&
       emuSettings.frame_rate_limit != 60) {
     emuSettings.frame_rate_limit = 60;
+  }
+  emuSettings.system_memory_mib =
+      GetPrefInt(env, activity, "setting_system_memory_mib", 64);
+  if (emuSettings.system_memory_mib != 64 &&
+      emuSettings.system_memory_mib != 128) {
+    emuSettings.system_memory_mib = 64;
   }
   emuSettings.use_dsp        = GetPrefBool(env, activity, "setting_use_dsp", false);
   emuSettings.hrtf           = GetPrefBool(env, activity, "setting_hrtf", true);
