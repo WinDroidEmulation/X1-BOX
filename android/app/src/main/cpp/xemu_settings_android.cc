@@ -404,6 +404,20 @@ bool xemu_settings_load(void)
             }
         }
 
+        if (auto mem_limit = sys["mem_limit"].value<std::string>()) {
+            if (*mem_limit == "128") {
+                g_config.sys.mem_limit = CONFIG_SYS_MEM_LIMIT_128;
+            } else {
+                g_config.sys.mem_limit = CONFIG_SYS_MEM_LIMIT_64;
+            }
+        } else if (auto mem_limit = sys["mem_limit"].value<int64_t>()) {
+            if ((int)*mem_limit == 128) {
+                g_config.sys.mem_limit = CONFIG_SYS_MEM_LIMIT_128;
+            } else {
+                g_config.sys.mem_limit = CONFIG_SYS_MEM_LIMIT_64;
+            }
+        }
+
         // System file paths
         if (auto bootrom = sys_files["bootrom_path"].value<std::string>()) {
             xemu_settings_set_string(&g_config.sys.files.bootrom_path, bootrom->c_str());
