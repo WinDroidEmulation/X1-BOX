@@ -31,18 +31,105 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Install SDK / NDK / CMake
+      - name: Detect Gradle config
+        id: meta
+        shell: bash
         run: |
+          set -e
+
+          GRADLE="android/app/build.gradle.kts"
+          STRINGS="android/app/src/main/res/values/strings.xml"
+
+          [ -f "$GRADLE" ] || { echo "❌ $GRADLE not found"; exit 1; }
+
+          COMPILE_SDK=$(grep -m1 -E 'compileSdk\s*=\s*[0-9]+' "$GRADLE" | sed -E 's/[^0-9]*([0-9]+).*/\1/' || true)
+          BUILD_TOOLS=$(grep -m1 -E 'buildToolsVersion\s*=\s*"' "$GRADLE" | sed -E 's/.*"([^"]+)".*/\1/' || true)
+          NDK_VERSION=$(grep -m1 -E 'ndkVersion\s*=\s*"' "$GRADLE" | sed -E 's/.*"([^"]+)".*/\1/' || true)
+
+          MIN_SDK=$(grep -m1 -E 'minSdk\s*=\s*[0-9]+' "$GRADLE" | sed -E 's/[^0-9]*([0-9]+).*/\1/' || true)
+          TARGET_SDK=$(grep -m1 -E 'targetSdk\s*=\s*[0-9]+' "$GRADLE" | sed -E 's/[^0-9]*([0-9]+).*/\1/' || true)
+          VERSION_NAME=$(grep -m1 -E 'versionName\s*=\s*"' "$GRADLE" | sed -E 's/.*"([^"]+)".*/\1/' || true)
+
+          CMAKE_VERSION=$(awk '
+            BEGIN{in_enb=0; in_cmake=0; brace=0}
+            /externalNativeBuild[[:space:]]*\{/ {in_enb=1}
+            {
+              if(in_enb){
+                oc=gsub(/\{/,"&"); cc=gsub(/\}/,"&"); brace += (oc-cc)
+
+                if($0 ~ /cmake[[:space:]]*\{/){in_cmake=1}
+
+                if(in_cmake && match($0,/version[[:space:]]*=[[:space:]]*"([^"]+)"/,m)){
+                  print m[1]; exit
+                }
+
+                if(brace<=0){in_enb=0; in_cmake=0; brace=0}
+              }
+            }
+          ' "$GRADLE" || true)
+
+          [ -n "$COMPILE_SDK" ] || { echo "❌ compileSdk not detected"; exit 1; }
+          [ -n "$BUILD_TOOLS" ] || { echo "❌ buildToolsVersion not detected"; exit 1; }
+          [ -n "$NDK_VERSION" ] || { echo "❌ ndkVersion not detected"; exit 1; }
+          [ -n "$MIN_SDK" ] || { echo "❌ minSdk not detected"; exit 1; }
+          [ -n "$TARGET_SDK" ] || { echo "❌ targetSdk not detected"; exit 1; }
+          [ -n "$VERSION_NAME" ] || { echo "❌ versionName not detected"; exit 1; }
+
+          if [ -z "$CMAKE_VERSION" ]; then
+            CMAKE_VERSION="3.30.3"
+          fi
+
+          [ -f "$STRINGS" ] || { echo "❌ $STRINGS not found"; exit 1; }
+
+          APP_NAME=$(grep -m1 -E '<string\s+name="app_name"\s*>' "$STRINGS" \
+            | sed -E 's/.*<string[^>]*name="app_name"[^>]*>([^<]+)<\/string>.*/\1/' || true)
+
+          [ -n "$APP_NAME" ] || { echo "❌ app_name not detected"; exit 1; }
+
+          APP_NAME_SAFE=$(echo "$APP_NAME" | tr ' ' '-' | tr -cd 'A-Za-z0-9._-')
+
+          [ -n "$APP_NAME_SAFE" ] || { echo "❌ APP_NAME_SAFE empty after sanitize"; exit 1; }
+
+          if [ "$MIN_SDK" -lt 24 ]; then
+            SIGN_V1=true
+          else
+            SIGN_V1=false
+          fi
+
+          SIGN_V2=true
+          SIGN_V3=true
+          SIGN_V4=false
+
+          {
+            echo "COMPILE_SDK=$COMPILE_SDK"
+            echo "BUILD_TOOLS=$BUILD_TOOLS"
+            echo "NDK_VERSION=$NDK_VERSION"
+            echo "CMAKE_VERSION=$CMAKE_VERSION"
+            echo "MIN_SDK=$MIN_SDK"
+            echo "TARGET_SDK=$TARGET_SDK"
+            echo "VERSION_NAME=$VERSION_NAME"
+            echo "APP_NAME=$APP_NAME"
+            echo "APP_NAME_SAFE=$APP_NAME_SAFE"
+            echo "SIGN_V1=$SIGN_V1"
+            echo "SIGN_V2=$SIGN_V2"
+            echo "SIGN_V3=$SIGN_V3"
+            echo "SIGN_V4=$SIGN_V4"
+          } >> $GITHUB_ENV
+
+      - name: Install SDK / NDK / CMake
+        shell: bash
+        run: |
+          set -e
           yes | sdkmanager --licenses
           sdkmanager \
             "platform-tools" \
-            "platforms;android-36" \
-            "build-tools;36.1.0" \
-            "cmake;3.30.3" \
-            "ndk;29.0.14206865"
-          echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/29.0.14206865" >> $GITHUB_ENV
-          echo "ANDROID_NDK_ROOT=$ANDROID_SDK_ROOT/ndk/29.0.14206865" >> $GITHUB_ENV
-          echo "BUILD_TOOLS=36.1.0" >> $GITHUB_ENV
+            "platforms;android-${COMPILE_SDK}" \
+            "build-tools;${BUILD_TOOLS}" \
+            "cmake;${CMAKE_VERSION}" \
+            "ndk;${NDK_VERSION}"
+
+          echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/${NDK_VERSION}" >> $GITHUB_ENV
+          echo "ANDROID_NDK_ROOT=$ANDROID_SDK_ROOT/ndk/${NDK_VERSION}" >> $GITHUB_ENV
 
       - name: Install Linux build tools
         run: |
@@ -57,7 +144,7 @@ jobs:
             curl \
             unzip
 
-      - name: Install Rust (rustup + cargo)
+      - name: Install Rust
         shell: bash
         run: |
           set -e
@@ -68,14 +155,14 @@ jobs:
           rustc --version
           cargo --version
 
-      - name: Add Rust Android target (arm64)
+      - name: Add Rust Android target
         shell: bash
         run: |
           set -e
           rustup target add aarch64-linux-android
           rustup target list --installed
 
-      - name: Export Android toolchain for cargo
+      - name: Export Android toolchain
         shell: bash
         run: |
           set -e
@@ -83,107 +170,17 @@ jobs:
           echo "CXX_aarch64_linux_android=$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang++" >> $GITHUB_ENV
           echo "AR_aarch64_linux_android=$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar" >> $GITHUB_ENV
 
-      - name: Detect App Name + Version + minSdk/targetSdk (from build.gradle.kts)
-        id: meta
+      - name: Remove org.gradle.java.home
         shell: bash
         run: |
           set -e
-
-          GRADLE="android/app/build.gradle.kts"
-          STRINGS="android/app/src/main/res/values/strings.xml"
-
-          if [ ! -f "$GRADLE" ]; then
-            echo "❌ $GRADLE not found"
-            exit 1
-          fi
-
-          VERSION_NAME=$(grep -m1 -E 'versionName\s*=' "$GRADLE" | sed -E 's/.*"([^"]+)".*/\1/' || true)
-          if [ -z "$VERSION_NAME" ]; then
-            echo "❌ versionName not detected in $GRADLE"
-            exit 1
-          fi
-
-          MIN_SDK=$(grep -m1 -E 'minSdk\s*=' "$GRADLE" | sed -E 's/[^0-9]*([0-9]+).*/\1/' || true)
-          if [ -z "$MIN_SDK" ]; then
-            echo "❌ minSdk not detected in $GRADLE"
-            exit 1
-          fi
-
-          TARGET_SDK=$(grep -m1 -E 'targetSdk\s*=' "$GRADLE" | sed -E 's/[^0-9]*([0-9]+).*/\1/' || true)
-          if [ -z "$TARGET_SDK" ]; then
-            echo "❌ targetSdk not detected in $GRADLE"
-            exit 1
-          fi
-
-          if [ ! -f "$STRINGS" ]; then
-            echo "❌ $STRINGS not found"
-            exit 1
-          fi
-
-          APP_NAME=$(grep -m1 -E '<string\s+name="app_name"\s*>' "$STRINGS" | sed -E 's/.*<string[^>]*name="app_name"[^>]*>([^<]+)<\/string>.*/\1/' || true)
-          if [ -z "$APP_NAME" ]; then
-            echo "❌ app_name not detected in $STRINGS"
-            exit 1
-          fi
-
-          APP_NAME_SAFE=$(echo "$APP_NAME" | tr ' ' '-' | tr -cd 'A-Za-z0-9._-')
-          if [ -z "$APP_NAME_SAFE" ]; then
-            echo "❌ APP_NAME_SAFE empty after sanitize"
-            exit 1
-          fi
-
-          echo "VERSION_NAME=$VERSION_NAME" >> $GITHUB_ENV
-          echo "MIN_SDK=$MIN_SDK" >> $GITHUB_ENV
-          echo "TARGET_SDK=$TARGET_SDK" >> $GITHUB_ENV
-          echo "APP_NAME=$APP_NAME" >> $GITHUB_ENV
-          echo "APP_NAME_SAFE=$APP_NAME_SAFE" >> $GITHUB_ENV
-
-          echo "Detected APP_NAME=$APP_NAME"
-          echo "Detected APP_NAME_SAFE=$APP_NAME_SAFE"
-          echo "Detected VERSION_NAME=$VERSION_NAME"
-          echo "Detected MIN_SDK=$MIN_SDK"
-          echo "Detected TARGET_SDK=$TARGET_SDK"
-
-      - name: Remove org.gradle.java.home (force setup-java)
-        shell: bash
-        run: |
-          set -e
-          echo "JAVA_HOME: $JAVA_HOME"
-          java -version
           for f in android/gradle.properties gradle.properties "$HOME/.gradle/gradle.properties"; do
             if [ -f "$f" ]; then
               sed -i '/^\s*org\.gradle\.java\.home\s*=/d' "$f"
             fi
           done
-          echo "ORG_GRADLE_PROJECT_org.gradle.java.home=" >> $GITHUB_ENV
-          (grep -R "org.gradle.java.home" -n . || true)
 
-      - name: Fix DEFAULT_JVM_OPTS in gradlew (Linux + Windows)
-        shell: bash
-        run: |
-          set -e
-          if [ -f android/gradlew ]; then
-            sed -i 's/^DEFAULT_JVM_OPTS=.*/DEFAULT_JVM_OPTS="-Xmx2g -Xms256m"/' android/gradlew || true
-            sed -i 's/"\\"-Xmx64m\\""/"-Xmx2g -Xms256m"/g' android/gradlew || true
-            sed -i 's/"-Xmx64m"/"-Xmx2g -Xms256m"/g' android/gradlew || true
-          fi
-          if [ -f android/gradlew.bat ]; then
-            sed -i 's/^set DEFAULT_JVM_OPTS=.*/set DEFAULT_JVM_OPTS=-Xmx2g -Xms256m/' android/gradlew.bat || true
-          fi
-
-      - name: Patch NDK prebuilt host tag (windows -> linux)
-        shell: bash
-        run: |
-          set -e
-          echo "Patching any hardcoded windows-x86_64 to linux-x86_64..."
-          if [ -d android ]; then
-            grep -RIl "windows-x86_64" android || true
-            grep -RIl "windows-x86_64" android | xargs -r sed -i 's/windows-x86_64/linux-x86_64/g'
-          fi
-          echo "Verify:"
-          (grep -R "windows-x86_64" -n android || true)
-
-      - name: Delete .cxx (clean native cache)
+      - name: Delete .cxx
         run: rm -rf android/app/.cxx
 
       - name: Decode keystore
@@ -191,19 +188,17 @@ jobs:
         run: |
           set -e
           echo "${{ secrets.ANDROID_KEYSTORE_B64 }}" | base64 -d > android/release.jks
-          ls -la android/release.jks
 
-      - name: Build Release (APK only)
+      - name: Build Release
         working-directory: android
         shell: bash
         run: |
           set -e
           chmod +x gradlew
-          ./gradlew --version
           ./gradlew clean
           ./gradlew :app:assembleRelease
 
-      - name: Set unique Release Tag (auto from app + version)
+      - name: Set unique Release Tag
         shell: bash
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -228,22 +223,16 @@ jobs:
 
           echo "REL_TAG=$TAG" >> $GITHUB_ENV
           echo "REL_NAME=$TAG" >> $GITHUB_ENV
-          echo "Using tag: $TAG"
 
-      - name: Zipalign + Sign + Rename APK (v1+v2+v3) (no v4 / no idsig)
+      - name: Zipalign + Sign
         shell: bash
         run: |
           set -e
+
           APK_DIR="android/app/build/outputs/apk/release"
           APK_UNSIGNED="$APK_DIR/app-release-unsigned.apk"
           APK_ALIGNED="$APK_DIR/app-release-unsigned-aligned.apk"
           FINAL_APK="$APK_DIR/${APP_NAME_SAFE}-${VERSION_NAME}.apk"
-
-          if [ ! -f "$APK_UNSIGNED" ]; then
-            echo "❌ Unsigned APK not found!"
-            find android/app/build/outputs/apk -type f -name "*.apk" || true
-            exit 1
-          fi
 
           "$ANDROID_SDK_ROOT/build-tools/${BUILD_TOOLS}/zipalign" -f -p 4 \
             "$APK_UNSIGNED" "$APK_ALIGNED"
@@ -254,27 +243,25 @@ jobs:
             --ks-key-alias "${{ secrets.ANDROID_KEY_ALIAS }}" \
             --key-pass "pass:${{ secrets.ANDROID_KEY_PASSWORD }}" \
             --min-sdk-version "${MIN_SDK}" \
-            --v1-signing-enabled true \
-            --v2-signing-enabled true \
-            --v3-signing-enabled true \
-            --v4-signing-enabled false \
+            --v1-signing-enabled "${SIGN_V1}" \
+            --v2-signing-enabled "${SIGN_V2}" \
+            --v3-signing-enabled "${SIGN_V3}" \
+            --v4-signing-enabled "${SIGN_V4}" \
             --out "$FINAL_APK" \
             "$APK_ALIGNED"
 
           echo "## APK Signature Verification" > verify.txt
-          echo "" >> verify.txt
           "$ANDROID_SDK_ROOT/build-tools/${BUILD_TOOLS}/apksigner" verify --verbose "$FINAL_APK" >> verify.txt
 
           rm -f "$APK_UNSIGNED" "$APK_ALIGNED"
+
           echo "SIGNED_APK=$FINAL_APK" >> $GITHUB_ENV
 
-      - name: Create GitHub Release + Upload Signed APK
+      - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: "${{ env.REL_TAG }}"
           name: "${{ env.REL_NAME }}"
-          draft: false
-          prerelease: false
           body_path: verify.txt
           files: |
             ${{ env.SIGNED_APK }}
