@@ -1,4 +1,4 @@
-name: Android (X1 BOX) - Signed
+name: Android (X1 BOX) - Signed (NEXT-LEVEL FAST)
 
 on:
   workflow_dispatch:
@@ -22,48 +22,127 @@ jobs:
           submodules: recursive
           fetch-depth: 0
 
-      - name: Set up JDK 21
+      - name: Cache ccache
+        uses: actions/cache@v4
+        with:
+          path: ~/.ccache
+          key: ccache-${{ runner.os }}-${{ github.ref }}
+          restore-keys: |
+            ccache-${{ runner.os }}-
+
+      - name: Cache Gradle (wrapper + caches + build-cache)
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/wrapper
+            ~/.gradle/caches
+            ~/.gradle/build-cache
+          key: >-
+            gradle-${{ runner.os }}-${{
+              hashFiles(
+                '**/*.gradle*',
+                '**/gradle-wrapper.properties',
+                '**/gradle.properties',
+                '**/settings.gradle*',
+                '**/libs.versions.toml'
+              )
+            }}
+          restore-keys: |
+            gradle-${{ runner.os }}-
+
+      - name: Set up JDK 21 (with Gradle cache)
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "21"
+          cache: gradle
 
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Install SDK / NDK / CMake
+      - name: Cache Android SDK / NDK / CMake
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ env.ANDROID_SDK_ROOT }}
+            ~/.android
+          key: androidsdk-${{ runner.os }}-api34-bt36.0.0-ndk29.0.14206865-cmake3.30.3
+          restore-keys: |
+            androidsdk-${{ runner.os }}-
+
+      - name: Install SDK / NDK / CMake (skip if already present)
+        shell: bash
         run: |
-          yes | sdkmanager --licenses
-          sdkmanager \
-            "platform-tools" \
-            "platforms;android-34" \
-            "build-tools;36.0.0" \
-            "cmake;3.30.3" \
-            "ndk;29.0.14206865"
+          set -e
+          BT="$ANDROID_SDK_ROOT/build-tools/36.0.0"
+          PL="$ANDROID_SDK_ROOT/platforms/android-34"
+          NDK="$ANDROID_SDK_ROOT/ndk/29.0.14206865"
+          CM="$ANDROID_SDK_ROOT/cmake/3.30.3"
+
+          if [ -d "$BT" ] && [ -d "$PL" ] && [ -d "$NDK" ] && [ -d "$CM" ]; then
+            echo "✅ Android SDK components already present. Skipping sdkmanager."
+          else
+            yes | sdkmanager --licenses
+            sdkmanager \
+              "platform-tools" \
+              "platforms;android-34" \
+              "build-tools;36.0.0" \
+              "cmake;3.30.3" \
+              "ndk;29.0.14206865"
+          fi
+
           echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/29.0.14206865" >> $GITHUB_ENV
           echo "ANDROID_NDK_ROOT=$ANDROID_SDK_ROOT/ndk/29.0.14206865" >> $GITHUB_ENV
 
-      - name: Install Linux build tools
+      - name: Install Linux build tools (lean)
+        shell: bash
         run: |
+          set -e
           sudo apt-get update
-          sudo apt-get install -y \
+          sudo apt-get install -y --no-install-recommends \
             ninja-build \
-            meson \
             pkg-config \
-            python3 \
-            python3-pip \
-            python3-setuptools \
             curl \
-            unzip
+            unzip \
+            ccache \
+            python3 \
+            python3-setuptools
+          sudo apt-get clean
 
-      - name: Install Rust (rustup + cargo)
+      - name: Enable ccache (CMake + Gradle args)
+        shell: bash
+        run: |
+          set -e
+          echo "CCACHE_DIR=$HOME/.ccache" >> $GITHUB_ENV
+          echo "CCACHE_MAXSIZE=2G" >> $GITHUB_ENV
+          ccache -M 2G
+          ccache -z
+
+          echo "ORG_GRADLE_PROJECT_android.defaults.buildfeatures.buildconfig=true" >> $GITHUB_ENV
+
+          echo "ORG_GRADLE_PROJECT_android.externalNativeBuild.cmake.arguments=-DCMAKE_C_COMPILER_LAUNCHER=ccache,-DCMAKE_CXX_COMPILER_LAUNCHER=ccache" >> $GITHUB_ENV
+          echo "ORG_GRADLE_PROJECT_cmake.args=-DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache" >> $GITHUB_ENV
+
+      - name: Cache Rust (cargo + rustup)
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo
+            ~/.rustup
+          key: rust-${{ runner.os }}-stable
+          restore-keys: |
+            rust-${{ runner.os }}-
+
+      - name: Install Rust (rustup + cargo) (cached)
         shell: bash
         run: |
           set -e
           echo "CARGO_HOME=$HOME/.cargo" >> $GITHUB_ENV
           echo "RUSTUP_HOME=$HOME/.rustup" >> $GITHUB_ENV
-          curl -sSf https://sh.rustup.rs | sh -s -- -y
           echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+          if ! command -v rustc >/dev/null 2>&1; then
+            curl -sSf https://sh.rustup.rs | sh -s -- -y
+          fi
           rustc --version
           cargo --version
 
@@ -87,11 +166,9 @@ jobs:
         shell: bash
         run: |
           set -e
-
           GRADLE="android/app/build.gradle.kts"
           STRINGS="android/app/src/main/res/values/strings.xml"
 
-          # ---- versionName (required) ----
           if [ ! -f "$GRADLE" ]; then
             echo "❌ $GRADLE not found"
             exit 1
@@ -103,7 +180,6 @@ jobs:
             exit 1
           fi
 
-          # ---- app_name (required) ----
           if [ ! -f "$STRINGS" ]; then
             echo "❌ $STRINGS not found"
             exit 1
@@ -115,7 +191,6 @@ jobs:
             exit 1
           fi
 
-          # Safe filename: spaces -> -, remove weird chars
           APP_NAME_SAFE=$(echo "$APP_NAME" | tr ' ' '-' | tr -cd 'A-Za-z0-9._-')
           if [ -z "$APP_NAME_SAFE" ]; then
             echo "❌ APP_NAME_SAFE empty after sanitize"
@@ -126,23 +201,24 @@ jobs:
           echo "APP_NAME=$APP_NAME" >> $GITHUB_ENV
           echo "APP_NAME_SAFE=$APP_NAME_SAFE" >> $GITHUB_ENV
 
-          echo "Detected APP_NAME=$APP_NAME"
-          echo "Detected APP_NAME_SAFE=$APP_NAME_SAFE"
-          echo "Detected VERSION_NAME=$VERSION_NAME"
-
-      - name: Remove org.gradle.java.home (force setup-java)
+      - name: Speed up Gradle (parallel + cache + daemon + try config-cache)
         shell: bash
         run: |
           set -e
-          echo "JAVA_HOME: $JAVA_HOME"
-          java -version
-          for f in android/gradle.properties gradle.properties "$HOME/.gradle/gradle.properties"; do
+          mkdir -p "$HOME/.gradle"
+          cat >> "$HOME/.gradle/gradle.properties" <<'EOF'
+org.gradle.daemon=true
+org.gradle.parallel=true
+org.gradle.caching=true
+org.gradle.jvmargs=-Xmx3g -Dkotlin.daemon.jvm.options=-Xmx2g
+org.gradle.configuration-cache=true
+org.gradle.configuration-cache.problems=warn
+EOF
+          for f in android/gradle.properties gradle.properties; do
             if [ -f "$f" ]; then
               sed -i '/^\s*org\.gradle\.java\.home\s*=/d' "$f"
             fi
           done
-          echo "ORG_GRADLE_PROJECT_org.gradle.java.home=" >> $GITHUB_ENV
-          (grep -R "org.gradle.java.home" -n . || true)
 
       - name: Fix DEFAULT_JVM_OPTS in gradlew (Linux + Windows)
         shell: bash
@@ -161,13 +237,10 @@ jobs:
         shell: bash
         run: |
           set -e
-          echo "Patching any hardcoded windows-x86_64 to linux-x86_64..."
           if [ -d android ]; then
-            grep -RIl "windows-x86_64" android || true
-            grep -RIl "windows-x86_64" android | xargs -r sed -i 's/windows-x86_64/linux-x86_64/g'
+            grep -RIl "windows-x86_64" android >/dev/null 2>&1 && \
+              grep -RIl "windows-x86_64" android | xargs -r sed -i 's/windows-x86_64/linux-x86_64/g' || true
           fi
-          echo "Verify:"
-          (grep -R "windows-x86_64" -n android || true)
 
       - name: Delete .cxx (clean native cache)
         run: rm -rf android/app/.cxx
@@ -179,15 +252,18 @@ jobs:
           echo "${{ secrets.ANDROID_KEYSTORE_B64 }}" | base64 -d > android/release.jks
           ls -la android/release.jks
 
-      - name: Build Release (APK + AAB)
+      - name: Build Release (APK + AAB) (no clean)
         working-directory: android
         shell: bash
         run: |
           set -e
           chmod +x gradlew
           ./gradlew --version
-          ./gradlew clean
           ./gradlew :app:assembleRelease :app:bundleRelease
+
+      - name: ccache stats
+        if: always()
+        run: ccache -s
 
       - name: Set unique Release Tag (auto from app + version)
         shell: bash
@@ -214,7 +290,6 @@ jobs:
 
           echo "REL_TAG=$TAG" >> $GITHUB_ENV
           echo "REL_NAME=$TAG" >> $GITHUB_ENV
-          echo "Using tag: $TAG"
 
       - name: Sign + Rename APK (delete unsigned)
         shell: bash
@@ -222,7 +297,6 @@ jobs:
           set -e
           APK_DIR="android/app/build/outputs/apk/release"
           APK_UNSIGNED="$APK_DIR/app-release-unsigned.apk"
-
           FINAL_APK="$APK_DIR/${APP_NAME_SAFE}-${VERSION_NAME}.apk"
 
           if [ ! -f "$APK_UNSIGNED" ]; then
@@ -243,7 +317,7 @@ jobs:
           rm -f "$APK_UNSIGNED"
           echo "SIGNED_APK=$FINAL_APK" >> $GITHUB_ENV
 
-      - name: Create GitHub Release + Upload APK
+      - name: Create GitHub Release + Upload (APK + AAB)
         uses: softprops/action-gh-release@v2
         with:
           tag_name: "${{ env.REL_TAG }}"
