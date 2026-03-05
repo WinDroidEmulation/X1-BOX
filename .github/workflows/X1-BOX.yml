@@ -36,8 +36,8 @@ jobs:
           yes | sdkmanager --licenses
           sdkmanager \
             "platform-tools" \
-            "platforms;android-34" \
-            "build-tools;36.0.0" \
+            "platforms;android-36" \
+            "build-tools;36.1.0" \
             "cmake;3.30.3" \
             "ndk;29.0.14206865"
           echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/29.0.14206865" >> $GITHUB_ENV
@@ -227,7 +227,7 @@ jobs:
             exit 1
           fi
 
-          "$ANDROID_SDK_ROOT/build-tools/36.0.0/apksigner" sign \
+          "$ANDROID_SDK_ROOT/build-tools/36.1.0/apksigner" sign \
             --ks android/release.jks \
             --ks-pass "pass:${{ secrets.ANDROID_KEYSTORE_PASSWORD }}" \
             --ks-key-alias "${{ secrets.ANDROID_KEY_ALIAS }}" \
@@ -235,7 +235,10 @@ jobs:
             --out "$FINAL_APK" \
             "$APK_UNSIGNED"
 
-          "$ANDROID_SDK_ROOT/build-tools/36.0.0/apksigner" verify --verbose "$FINAL_APK"
+          echo "## APK Signature Verification" > verify.txt
+          echo "" >> verify.txt
+          "$ANDROID_SDK_ROOT/build-tools/36.1.0/apksigner" verify --verbose "$FINAL_APK" >> verify.txt
+
           rm -f "$APK_UNSIGNED"
           echo "SIGNED_APK=$FINAL_APK" >> $GITHUB_ENV
 
@@ -246,6 +249,7 @@ jobs:
           name: "${{ env.REL_NAME }}"
           draft: false
           prerelease: false
+          body_path: verify.txt
           files: |
             ${{ env.SIGNED_APK }}
         env:
