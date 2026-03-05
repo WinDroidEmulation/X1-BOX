@@ -20,6 +20,7 @@
 #include <vector>
 #include <sys/stat.h>
 #include <errno.h>
+#include <unistd.h>
 
 #include "xemu-settings.h"
 
@@ -190,13 +191,15 @@ static std::string ToLowerAscii(std::string value) {
 static std::string ResolveAndroidAudioDriverHint() {
   // OpenSL ES is preferred over AAudio because AAudio exclusively requests
   // MMAP no-IRQ low-latency outputs (AUDIO_OUTPUT_FLAG_MMAP_NOIRQ). On some
-  // devices (e.g. Honor/Huawei with Android 14) the MMAP output count is
-  // capped and openDirectOutput fails when the limit is reached, leaving the
-  // audio stream permanently inactive (isActive:0) and hanging the audio
-  // thread. OpenSL ES uses the standard AudioTrack path which has no such
-  // cap. "dummy" is the silent no-op SDL audio driver used as a last resort
-  // so that audio failure never prevents the emulator from running.
-  constexpr const char* kDefaultAudioDriverHint = "openslES,aaudio,android,dummy";
+  // devices (e.g. Honor/Huawei with Android 14+, Snapdragon 8 Gen 3/Adreno 840)
+  // the MMAP output count is capped and openDirectOutput fails when the limit
+  // is reached, leaving the audio stream permanently inactive (isActive:0) and
+  // hanging the audio thread with 1ms timeouts in AudioStreamInternal_Client.
+  // AAudio is deliberately excluded from the default chain: if OpenSL ES fails
+  // for any reason, "android" (standard AudioTrack) is the next safe fallback.
+  // "dummy" is the silent no-op driver used as a last resort so that audio
+  // failure never prevents the emulator from starting.
+  constexpr const char* kDefaultAudioDriverHint = "openslES,android,dummy";
   const char* value = SDL_getenv("XEMU_ANDROID_AUDIO_DRIVER");
   if (!value || value[0] == '\0') {
     return kDefaultAudioDriverHint;
@@ -1035,7 +1038,11 @@ extern "C" int SDL_main(int argc, char* argv[]) {
     xemu_android_display_wait_ready();
     LogInfo("SDL_main: display ready, entering render loop");
     xemu_android_display_loop();
-    return 0;
+    // Force process exit so Android cannot freeze-and-reuse this process for a
+    // subsequent game launch.  qemu_init() cannot be called twice in the same
+    // process; if the process is thawed and SDL_main is re-entered, qemu_init
+    // asserts/aborts (confirmed by Burnout 3 logcat: SIGABRT in tid 29278).
+    _exit(0);
   }
 
   SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_ES);
