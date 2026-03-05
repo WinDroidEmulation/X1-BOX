@@ -42,6 +42,7 @@ jobs:
             "ndk;29.0.14206865"
           echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/29.0.14206865" >> $GITHUB_ENV
           echo "ANDROID_NDK_ROOT=$ANDROID_SDK_ROOT/ndk/29.0.14206865" >> $GITHUB_ENV
+          echo "BUILD_TOOLS_VERSION=36.1.0" >> $GITHUB_ENV
 
       - name: Install Linux build tools
         run: |
@@ -74,7 +75,7 @@ jobs:
           rustup target add aarch64-linux-android
           rustup target list --installed
 
-      - name: Export Android toolchain for cargo
+      - name: Export Android toolchain for cargo (minSdk 26)
         shell: bash
         run: |
           set -e
@@ -123,10 +124,16 @@ jobs:
           echo "APP_NAME=$APP_NAME" >> $GITHUB_ENV
           echo "APP_NAME_SAFE=$APP_NAME_SAFE" >> $GITHUB_ENV
 
+          echo "Detected APP_NAME=$APP_NAME"
+          echo "Detected APP_NAME_SAFE=$APP_NAME_SAFE"
+          echo "Detected VERSION_NAME=$VERSION_NAME"
+
       - name: Remove org.gradle.java.home (force setup-java)
         shell: bash
         run: |
           set -e
+          echo "JAVA_HOME: $JAVA_HOME"
+          java -version
           for f in android/gradle.properties gradle.properties "$HOME/.gradle/gradle.properties"; do
             if [ -f "$f" ]; then
               sed -i '/^\s*org\.gradle\.java\.home\s*=/d' "$f"
@@ -152,10 +159,12 @@ jobs:
         shell: bash
         run: |
           set -e
+          echo "Patching any hardcoded windows-x86_64 to linux-x86_64..."
           if [ -d android ]; then
             grep -RIl "windows-x86_64" android || true
             grep -RIl "windows-x86_64" android | xargs -r sed -i 's/windows-x86_64/linux-x86_64/g'
           fi
+          echo "Verify:"
           (grep -R "windows-x86_64" -n android || true)
 
       - name: Delete .cxx (clean native cache)
@@ -168,7 +177,7 @@ jobs:
           echo "${{ secrets.ANDROID_KEYSTORE_B64 }}" | base64 -d > android/release.jks
           ls -la android/release.jks
 
-      - name: Build Release (APK only)
+      - name: Build Release (APK + AAB)
         working-directory: android
         shell: bash
         run: |
@@ -176,7 +185,7 @@ jobs:
           chmod +x gradlew
           ./gradlew --version
           ./gradlew clean
-          ./gradlew :app:assembleRelease
+          ./gradlew :app:assembleRelease :app:bundleRelease
 
       - name: Set unique Release Tag (auto from app + version)
         shell: bash
@@ -205,13 +214,13 @@ jobs:
           echo "REL_NAME=$TAG" >> $GITHUB_ENV
           echo "Using tag: $TAG"
 
-      - name: Zipalign + Sign + Rename APK (delete unsigned)
+      - name: Zipalign + Sign + Rename APK (delete temp)
         shell: bash
         run: |
           set -e
           APK_DIR="android/app/build/outputs/apk/release"
           APK_UNSIGNED="$APK_DIR/app-release-unsigned.apk"
-          APK_ALIGNED="$APK_DIR/app-release-unsigned-aligned.apk"
+          APK_ALIGNED="$APK_DIR/app-release-aligned.apk"
           FINAL_APK="$APK_DIR/${APP_NAME_SAFE}-${VERSION_NAME}.apk"
 
           if [ ! -f "$APK_UNSIGNED" ]; then
@@ -220,10 +229,13 @@ jobs:
             exit 1
           fi
 
-          "$ANDROID_SDK_ROOT/build-tools/36.1.0/zipalign" -f -p 4 \
-            "$APK_UNSIGNED" "$APK_ALIGNED"
+          echo "✅ Zipalign..."
+          "$ANDROID_SDK_ROOT/build-tools/${BUILD_TOOLS_VERSION}/zipalign" -f 4 \
+            "$APK_UNSIGNED" \
+            "$APK_ALIGNED"
 
-          "$ANDROID_SDK_ROOT/build-tools/36.1.0/apksigner" sign \
+          echo "✅ Sign..."
+          "$ANDROID_SDK_ROOT/build-tools/${BUILD_TOOLS_VERSION}/apksigner" sign \
             --ks android/release.jks \
             --ks-pass "pass:${{ secrets.ANDROID_KEYSTORE_PASSWORD }}" \
             --ks-key-alias "${{ secrets.ANDROID_KEY_ALIAS }}" \
@@ -231,7 +243,9 @@ jobs:
             --out "$FINAL_APK" \
             "$APK_ALIGNED"
 
-          "$ANDROID_SDK_ROOT/build-tools/36.1.0/apksigner" verify --verbose "$FINAL_APK"
+          echo "✅ Verify..."
+          "$ANDROID_SDK_ROOT/build-tools/${BUILD_TOOLS_VERSION}/apksigner" verify --verbose "$FINAL_APK"
+
           rm -f "$APK_UNSIGNED" "$APK_ALIGNED"
           echo "SIGNED_APK=$FINAL_APK" >> $GITHUB_ENV
 
@@ -244,5 +258,6 @@ jobs:
           prerelease: false
           files: |
             ${{ env.SIGNED_APK }}
+            android/app/build/outputs/bundle/release/*.aab
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
