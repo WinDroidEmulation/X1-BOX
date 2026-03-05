@@ -213,12 +213,13 @@ jobs:
           echo "REL_NAME=$TAG" >> $GITHUB_ENV
           echo "Using tag: $TAG"
 
-      - name: Sign + Rename APK (delete unsigned)
+      - name: Zipalign + Sign + Rename APK (v1+v2+v3) (no v4)
         shell: bash
         run: |
           set -e
           APK_DIR="android/app/build/outputs/apk/release"
           APK_UNSIGNED="$APK_DIR/app-release-unsigned.apk"
+          APK_ALIGNED="$APK_DIR/app-release-unsigned-aligned.apk"
           FINAL_APK="$APK_DIR/${APP_NAME_SAFE}-${VERSION_NAME}.apk"
 
           if [ ! -f "$APK_UNSIGNED" ]; then
@@ -227,19 +228,27 @@ jobs:
             exit 1
           fi
 
+          "$ANDROID_SDK_ROOT/build-tools/36.1.0/zipalign" -f -p 4 \
+            "$APK_UNSIGNED" "$APK_ALIGNED"
+
           "$ANDROID_SDK_ROOT/build-tools/36.1.0/apksigner" sign \
             --ks android/release.jks \
             --ks-pass "pass:${{ secrets.ANDROID_KEYSTORE_PASSWORD }}" \
             --ks-key-alias "${{ secrets.ANDROID_KEY_ALIAS }}" \
             --key-pass "pass:${{ secrets.ANDROID_KEY_PASSWORD }}" \
+            --min-sdk-version 21 \
+            --v1-signing-enabled true \
+            --v2-signing-enabled true \
+            --v3-signing-enabled true \
+            --v4-signing-enabled false \
             --out "$FINAL_APK" \
-            "$APK_UNSIGNED"
+            "$APK_ALIGNED"
 
           echo "## APK Signature Verification" > verify.txt
           echo "" >> verify.txt
           "$ANDROID_SDK_ROOT/build-tools/36.1.0/apksigner" verify --verbose "$FINAL_APK" >> verify.txt
 
-          rm -f "$APK_UNSIGNED"
+          rm -f "$APK_UNSIGNED" "$APK_ALIGNED"
           echo "SIGNED_APK=$FINAL_APK" >> $GITHUB_ENV
 
       - name: Create GitHub Release + Upload Signed APK
