@@ -1,4 +1,4 @@
-name: X1 BOX - Signed
+name: Android (X1 BOX) - Signed
 
 on:
   workflow_dispatch:
@@ -159,12 +159,12 @@ jobs:
           set -e
           echo "${{ secrets.ANDROID_KEYSTORE_B64 }}" | base64 -d > android/release.jks
 
-      - name: Create root key.properties for Gradle signing
+      - name: Create key.properties for Gradle signing
         shell: bash
         run: |
           set -e
-          cat <<EOF > key.properties
-          storeFile=../release.jks
+          cat <<EOF > android/key.properties
+          storeFile=release.jks
           storePassword=${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           keyAlias=${{ secrets.ANDROID_KEY_ALIAS }}
           keyPassword=${{ secrets.ANDROID_KEY_PASSWORD }}
