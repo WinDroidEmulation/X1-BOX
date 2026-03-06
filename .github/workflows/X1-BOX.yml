@@ -91,7 +91,6 @@ jobs:
           GRADLE="android/app/build.gradle.kts"
           STRINGS="android/app/src/main/res/values/strings.xml"
 
-          # ---- versionName (required) ----
           if [ ! -f "$GRADLE" ]; then
             echo "❌ $GRADLE not found"
             exit 1
@@ -103,7 +102,6 @@ jobs:
             exit 1
           fi
 
-          # ---- app_name (required) ----
           if [ ! -f "$STRINGS" ]; then
             echo "❌ $STRINGS not found"
             exit 1
@@ -115,7 +113,6 @@ jobs:
             exit 1
           fi
 
-          # Safe filename: spaces -> -, remove weird chars
           APP_NAME_SAFE=$(echo "$APP_NAME" | tr ' ' '-' | tr -cd 'A-Za-z0-9._-')
           if [ -z "$APP_NAME_SAFE" ]; then
             echo "❌ APP_NAME_SAFE empty after sanitize"
@@ -126,50 +123,34 @@ jobs:
           echo "APP_NAME=$APP_NAME" >> $GITHUB_ENV
           echo "APP_NAME_SAFE=$APP_NAME_SAFE" >> $GITHUB_ENV
 
-          echo "Detected APP_NAME=$APP_NAME"
-          echo "Detected APP_NAME_SAFE=$APP_NAME_SAFE"
-          echo "Detected VERSION_NAME=$VERSION_NAME"
-
       - name: Remove org.gradle.java.home (force setup-java)
         shell: bash
         run: |
           set -e
-          echo "JAVA_HOME: $JAVA_HOME"
-          java -version
           for f in android/gradle.properties gradle.properties "$HOME/.gradle/gradle.properties"; do
             if [ -f "$f" ]; then
               sed -i '/^\s*org\.gradle\.java\.home\s*=/d' "$f"
             fi
           done
-          echo "ORG_GRADLE_PROJECT_org.gradle.java.home=" >> $GITHUB_ENV
-          (grep -R "org.gradle.java.home" -n . || true)
 
-      - name: Fix DEFAULT_JVM_OPTS in gradlew (Linux + Windows)
+      - name: Fix DEFAULT_JVM_OPTS in gradlew
         shell: bash
         run: |
           set -e
           if [ -f android/gradlew ]; then
             sed -i 's/^DEFAULT_JVM_OPTS=.*/DEFAULT_JVM_OPTS="-Xmx2g -Xms256m"/' android/gradlew || true
-            sed -i 's/"\\"-Xmx64m\\""/"-Xmx2g -Xms256m"/g' android/gradlew || true
-            sed -i 's/"-Xmx64m"/"-Xmx2g -Xms256m"/g' android/gradlew || true
-          fi
-          if [ -f android/gradlew.bat ]; then
-            sed -i 's/^set DEFAULT_JVM_OPTS=.*/set DEFAULT_JVM_OPTS=-Xmx2g -Xms256m/' android/gradlew.bat || true
           fi
 
-      - name: Patch NDK prebuilt host tag (windows -> linux)
+      - name: Patch NDK prebuilt host tag
         shell: bash
         run: |
           set -e
-          echo "Patching any hardcoded windows-x86_64 to linux-x86_64..."
           if [ -d android ]; then
             grep -RIl "windows-x86_64" android || true
             grep -RIl "windows-x86_64" android | xargs -r sed -i 's/windows-x86_64/linux-x86_64/g'
           fi
-          echo "Verify:"
-          (grep -R "windows-x86_64" -n android || true)
 
-      - name: Delete .cxx (clean native cache)
+      - name: Delete .cxx
         run: rm -rf android/app/.cxx
 
       - name: Decode keystore
@@ -177,19 +158,17 @@ jobs:
         run: |
           set -e
           echo "${{ secrets.ANDROID_KEYSTORE_B64 }}" | base64 -d > android/release.jks
-          ls -la android/release.jks
 
-      - name: Build Release (APK + AAB)
+      - name: Build Release APK
         working-directory: android
         shell: bash
         run: |
           set -e
           chmod +x gradlew
-          ./gradlew --version
           ./gradlew clean
-          ./gradlew :app:assembleRelease :app:bundleRelease
+          ./gradlew :app:assembleRelease
 
-      - name: Set unique Release Tag (auto from app + version)
+      - name: Set unique Release Tag
         shell: bash
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -197,26 +176,10 @@ jobs:
           set -e
           BASE="${APP_NAME_SAFE}-${VERSION_NAME}"
           TAG="$BASE"
-
-          exists() {
-            curl -s -H "Authorization: Bearer $GITHUB_TOKEN" \
-              -H "Accept: application/vnd.github+json" \
-              "https://api.github.com/repos/${GITHUB_REPOSITORY}/git/ref/tags/$1" \
-              | grep -q '"ref"'
-          }
-
-          if exists "$TAG"; then
-            TAG="${BASE}-build${GITHUB_RUN_NUMBER}"
-            if exists "$TAG"; then
-              TAG="${BASE}-run${GITHUB_RUN_ID}"
-            fi
-          fi
-
           echo "REL_TAG=$TAG" >> $GITHUB_ENV
           echo "REL_NAME=$TAG" >> $GITHUB_ENV
-          echo "Using tag: $TAG"
 
-      - name: Zipalign + Sign + Rename APK (delete unsigned)
+      - name: Zipalign + Sign + Rename APK
         shell: bash
         run: |
           set -e
@@ -225,12 +188,6 @@ jobs:
 
           ALIGNED_APK="$APK_DIR/app-release-unsigned-aligned.apk"
           FINAL_APK="$APK_DIR/${APP_NAME_SAFE}-${VERSION_NAME}.apk"
-
-          if [ ! -f "$APK_UNSIGNED" ]; then
-            echo "❌ Unsigned APK not found!"
-            find android/app/build/outputs/apk -type f -name "*.apk" || true
-            exit 1
-          fi
 
           "$ANDROID_SDK_ROOT/build-tools/36.1.0/zipalign" -v 4 \
             "$APK_UNSIGNED" "$ALIGNED_APK"
@@ -244,8 +201,10 @@ jobs:
             "$ALIGNED_APK"
 
           "$ANDROID_SDK_ROOT/build-tools/36.1.0/apksigner" verify --verbose "$FINAL_APK"
+
           rm -f "$APK_UNSIGNED"
           rm -f "$ALIGNED_APK"
+
           echo "SIGNED_APK=$FINAL_APK" >> $GITHUB_ENV
 
       - name: Create GitHub Release + Upload APK
@@ -253,10 +212,7 @@ jobs:
         with:
           tag_name: "${{ env.REL_TAG }}"
           name: "${{ env.REL_NAME }}"
-          draft: false
-          prerelease: false
           files: |
             ${{ env.SIGNED_APK }}
-            android/app/build/outputs/bundle/release/*.aab
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
