@@ -1,4 +1,4 @@
-name: Android (X1 BOX) - Signed
+name: X1 BOX - Signed
 
 on:
   workflow_dispatch:
