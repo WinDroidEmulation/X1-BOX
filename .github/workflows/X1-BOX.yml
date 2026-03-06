@@ -87,37 +87,12 @@ jobs:
         shell: bash
         run: |
           set -e
-
           GRADLE="android/app/build.gradle.kts"
           STRINGS="android/app/src/main/res/values/strings.xml"
 
-          if [ ! -f "$GRADLE" ]; then
-            echo "❌ $GRADLE not found"
-            exit 1
-          fi
-
-          VERSION_NAME=$(grep -m1 -E 'versionName\s*=' "$GRADLE" | sed -E 's/.*"([^"]+)".*/\1/' || true)
-          if [ -z "$VERSION_NAME" ]; then
-            echo "❌ versionName not detected in $GRADLE"
-            exit 1
-          fi
-
-          if [ ! -f "$STRINGS" ]; then
-            echo "❌ $STRINGS not found"
-            exit 1
-          fi
-
-          APP_NAME=$(grep -m1 -E '<string\s+name="app_name"\s*>' "$STRINGS" | sed -E 's/.*<string[^>]*name="app_name"[^>]*>([^<]+)<\/string>.*/\1/' || true)
-          if [ -z "$APP_NAME" ]; then
-            echo "❌ app_name not detected in $STRINGS"
-            exit 1
-          fi
-
+          VERSION_NAME=$(grep -m1 -E 'versionName\s*=' "$GRADLE" | sed -E 's/.*"([^"]+)".*/\1/')
+          APP_NAME=$(grep -m1 -E '<string\s+name="app_name"\s*>' "$STRINGS" | sed -E 's/.*>([^<]+)<\/string>.*/\1/')
           APP_NAME_SAFE=$(echo "$APP_NAME" | tr ' ' '-' | tr -cd 'A-Za-z0-9._-')
-          if [ -z "$APP_NAME_SAFE" ]; then
-            echo "❌ APP_NAME_SAFE empty after sanitize"
-            exit 1
-          fi
 
           echo "VERSION_NAME=$VERSION_NAME" >> $GITHUB_ENV
           echo "APP_NAME=$APP_NAME" >> $GITHUB_ENV
@@ -145,24 +120,16 @@ jobs:
         shell: bash
         run: |
           set -e
-          if [ -d android ]; then
-            grep -RIl "windows-x86_64" android || true
-            grep -RIl "windows-x86_64" android | xargs -r sed -i 's/windows-x86_64/linux-x86_64/g'
-          fi
+          grep -RIl "windows-x86_64" android | xargs -r sed -i 's/windows-x86_64/linux-x86_64/g'
 
       - name: Delete .cxx
         run: rm -rf android/app/.cxx
 
       - name: Decode keystore
-        shell: bash
-        run: |
-          set -e
-          echo "${{ secrets.ANDROID_KEYSTORE_B64 }}" | base64 -d > android/app/release.jks
+        run: echo "${{ secrets.ANDROID_KEYSTORE_B64 }}" | base64 -d > android/app/release.jks
 
       - name: Create key.properties for Gradle signing
-        shell: bash
         run: |
-          set -e
           {
             echo "storeFile=release.jks"
             echo "storePassword=${{ secrets.ANDROID_KEYSTORE_PASSWORD }}"
@@ -172,33 +139,25 @@ jobs:
 
       - name: Build Release APK
         working-directory: android
-        shell: bash
         run: |
-          set -e
           chmod +x gradlew
           ./gradlew clean
           ./gradlew :app:assembleRelease
 
       - name: Set unique Release Tag
-        shell: bash
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          set -e
           BASE="${APP_NAME_SAFE}-${VERSION_NAME}"
-          TAG="$BASE"
-          echo "REL_TAG=$TAG" >> $GITHUB_ENV
-          echo "REL_NAME=$TAG" >> $GITHUB_ENV
+          echo "REL_TAG=$BASE" >> $GITHUB_ENV
+          echo "REL_NAME=$BASE" >> $GITHUB_ENV
 
       - name: Get signed APK from Gradle (rename)
-        shell: bash
         run: |
           set -e
           APK_DIR="android/app/build/outputs/apk/release"
-          SRC_APK="$APK_DIR/app-release.apk"
+          SRC_APK=$(find "$APK_DIR" -type f -name "*release*.apk" | head -n 1)
           FINAL_APK="$APK_DIR/${APP_NAME_SAFE}-${VERSION_NAME}.apk"
 
-          if [ ! -f "$SRC_APK" ]; then
+          if [ -z "$SRC_APK" ]; then
             echo "❌ Gradle signed APK not found!"
             find android/app/build/outputs/apk -type f -name "*.apk" || true
             exit 1
@@ -208,9 +167,7 @@ jobs:
           echo "SIGNED_APK=$FINAL_APK" >> $GITHUB_ENV
 
       - name: Verify signed APK
-        shell: bash
         run: |
-          set -e
           "$ANDROID_SDK_ROOT/build-tools/36.1.0/apksigner" verify --verbose "${{ env.SIGNED_APK }}"
 
       - name: Create GitHub Release + Upload APK
