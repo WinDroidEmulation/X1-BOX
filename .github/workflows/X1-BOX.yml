@@ -154,7 +154,7 @@ jobs:
         run: |
           set -e
           APK_DIR="android/app/build/outputs/apk/release"
-          SRC_APK=$(find "$APK_DIR" -type f -name "*release*.apk" | head -n 1)
+          SRC_APK=$(find "$APK_DIR" -type f -name "*release*.apk" ! -name "*unsigned*" | head -n 1)
           FINAL_APK="$APK_DIR/${APP_NAME_SAFE}-${VERSION_NAME}.apk"
 
           if [ -z "$SRC_APK" ]; then
