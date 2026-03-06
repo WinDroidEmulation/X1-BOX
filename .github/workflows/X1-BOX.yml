@@ -163,12 +163,12 @@ jobs:
         shell: bash
         run: |
           set -e
-          cat <<EOF > android/key.properties
-storeFile=release.jks
-storePassword=${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-keyAlias=${{ secrets.ANDROID_KEY_ALIAS }}
-keyPassword=${{ secrets.ANDROID_KEY_PASSWORD }}
-EOF
+          printf '%s\n' \
+            'storeFile=release.jks' \
+            'storePassword=${{ secrets.ANDROID_KEYSTORE_PASSWORD }}' \
+            'keyAlias=${{ secrets.ANDROID_KEY_ALIAS }}' \
+            'keyPassword=${{ secrets.ANDROID_KEY_PASSWORD }}' \
+            > android/key.properties
 
       - name: Build Release APK
         working-directory: android
@@ -195,16 +195,23 @@ EOF
         run: |
           set -e
           APK_DIR="android/app/build/outputs/apk/release"
+          SRC_APK="$APK_DIR/app-release.apk"
           FINAL_APK="$APK_DIR/${APP_NAME_SAFE}-${VERSION_NAME}.apk"
 
-          if [ ! -f "$APK_DIR/app-release.apk" ]; then
+          if [ ! -f "$SRC_APK" ]; then
             echo "❌ Gradle signed APK not found!"
             find android/app/build/outputs/apk -type f -name "*.apk" || true
             exit 1
           fi
 
-          mv "$APK_DIR/app-release.apk" "$FINAL_APK"
+          mv "$SRC_APK" "$FINAL_APK"
           echo "SIGNED_APK=$FINAL_APK" >> $GITHUB_ENV
+
+      - name: Verify signed APK
+        shell: bash
+        run: |
+          set -e
+          "$ANDROID_SDK_ROOT/build-tools/36.1.0/apksigner" verify --verbose "${{ env.SIGNED_APK }}"
 
       - name: Create GitHub Release + Upload APK
         uses: softprops/action-gh-release@v2
