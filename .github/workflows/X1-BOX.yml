@@ -157,18 +157,18 @@ jobs:
         shell: bash
         run: |
           set -e
-          echo "${{ secrets.ANDROID_KEYSTORE_B64 }}" | base64 -d > android/release.jks
+          echo "${{ secrets.ANDROID_KEYSTORE_B64 }}" | base64 -d > android/app/release.jks
 
       - name: Create key.properties for Gradle signing
         shell: bash
         run: |
           set -e
-          printf '%s\n' \
-            'storeFile=release.jks' \
-            'storePassword=${{ secrets.ANDROID_KEYSTORE_PASSWORD }}' \
-            'keyAlias=${{ secrets.ANDROID_KEY_ALIAS }}' \
-            'keyPassword=${{ secrets.ANDROID_KEY_PASSWORD }}' \
-            > android/key.properties
+          {
+            echo "storeFile=app/release.jks"
+            echo "storePassword=${{ secrets.ANDROID_KEYSTORE_PASSWORD }}"
+            echo "keyAlias=${{ secrets.ANDROID_KEY_ALIAS }}"
+            echo "keyPassword=${{ secrets.ANDROID_KEY_PASSWORD }}"
+          } > android/key.properties
 
       - name: Build Release APK
         working-directory: android
