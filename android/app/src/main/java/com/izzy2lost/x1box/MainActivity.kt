@@ -7,21 +7,25 @@ import android.hardware.input.InputManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.util.Log
 import android.view.InputDevice
 import android.view.KeyEvent
 import android.view.View
 import android.view.ViewGroup
 import android.view.WindowInsets
 import android.view.WindowInsetsController
+import android.view.WindowManager
 import android.widget.BaseAdapter
 import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.ListView
+import android.widget.RelativeLayout
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import org.libsdl.app.SDLActivity
+import org.libsdl.app.SDLSurface
 import java.io.File
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -31,6 +35,7 @@ class MainActivity : SDLActivity(), InputManager.InputDeviceListener {
     const val EXTRA_AUTO_LOAD_SNAPSHOT_SLOT = "com.izzy2lost.x1box.extra.AUTO_LOAD_SNAPSHOT_SLOT"
     private const val SNAPSHOT_PREVIEW_HEADER_SIZE = 12
     private const val TOTAL_SNAPSHOT_SLOTS = 10
+    private const val TAG = "MainActivity"
   }
 
   private data class SnapshotSlotPreview(
@@ -52,8 +57,19 @@ class MainActivity : SDLActivity(), InputManager.InputDeviceListener {
   private var startupSnapshotSlot: Int? = null
   private var startupSnapshotLoadScheduled = false
 
+  override fun createSDLSurface(context: Context): SDLSurface {
+    return super.createSDLSurface(context).apply {
+      layoutParams = RelativeLayout.LayoutParams(
+        ViewGroup.LayoutParams.MATCH_PARENT,
+        ViewGroup.LayoutParams.MATCH_PARENT
+      )
+      keepScreenOn = true
+    }
+  }
+
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
+    window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
     val requestedSlot = intent?.getIntExtra(EXTRA_AUTO_LOAD_SNAPSHOT_SLOT, 0) ?: 0
     if (requestedSlot in 1..TOTAL_SNAPSHOT_SLOTS) {
       startupSnapshotSlot = requestedSlot
@@ -144,6 +160,8 @@ class MainActivity : SDLActivity(), InputManager.InputDeviceListener {
 
   override fun onResume() {
     super.onResume()
+    window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+    mLayout?.keepScreenOn = true
     
     // Register virtual controller after SDL is initialized
     // Use a delay to ensure SDL is fully ready
@@ -261,6 +279,7 @@ class MainActivity : SDLActivity(), InputManager.InputDeviceListener {
   }
 
   override fun onDestroy() {
+    Log.i(TAG, "onDestroy()")
     inGameMenuDialog?.dismiss()
     inGameMenuDialog = null
 
@@ -272,7 +291,23 @@ class MainActivity : SDLActivity(), InputManager.InputDeviceListener {
     }
     
     inputManager?.unregisterInputDeviceListener(this)
+    window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
     super.onDestroy()
+  }
+
+  override fun onUserLeaveHint() {
+    Log.i(TAG, "onUserLeaveHint()")
+    super.onUserLeaveHint()
+  }
+
+  override fun onTrimMemory(level: Int) {
+    Log.i(TAG, "onTrimMemory(level=$level)")
+    super.onTrimMemory(level)
+  }
+
+  override fun onLowMemory() {
+    Log.w(TAG, "onLowMemory()")
+    super.onLowMemory()
   }
 
   // Manual control methods (for settings/preferences)

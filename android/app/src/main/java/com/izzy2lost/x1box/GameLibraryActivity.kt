@@ -125,6 +125,8 @@ class GameLibraryActivity : AppCompatActivity() {
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
     setContentView(R.layout.activity_game_library)
+    EdgeToEdgeHelper.enable(this)
+    EdgeToEdgeHelper.applySystemBarPadding(findViewById(R.id.library_scroll))
 
     if (tryRestartLastGameFromIntent()) {
       return

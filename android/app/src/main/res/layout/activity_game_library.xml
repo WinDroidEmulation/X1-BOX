@@ -3,8 +3,7 @@
   xmlns:app="http://schemas.android.com/apk/res-auto"
   android:layout_width="match_parent"
   android:layout_height="match_parent"
-  android:background="@drawable/setup_wizard_background"
-  android:fitsSystemWindows="true">
+  android:background="@drawable/setup_wizard_background">
 
   <androidx.core.widget.NestedScrollView
     android:id="@+id/library_scroll"

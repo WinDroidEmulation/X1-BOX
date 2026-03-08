@@ -267,14 +267,14 @@ void pgraph_clear_dirty_reg_map(PGRAPHState *pg)
 static CONFIG_DISPLAY_RENDERER get_default_renderer(void)
 {
 #ifdef __ANDROID__
-#ifdef CONFIG_VULKAN
-    if (renderers[CONFIG_DISPLAY_RENDERER_VULKAN]) {
-        return CONFIG_DISPLAY_RENDERER_VULKAN;
-    }
-#endif
 #ifdef CONFIG_OPENGL
     if (renderers[CONFIG_DISPLAY_RENDERER_OPENGL]) {
         return CONFIG_DISPLAY_RENDERER_OPENGL;
+    }
+#endif
+#ifdef CONFIG_VULKAN
+    if (renderers[CONFIG_DISPLAY_RENDERER_VULKAN]) {
+        return CONFIG_DISPLAY_RENDERER_VULKAN;
     }
 #endif
 #else

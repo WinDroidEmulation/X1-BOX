@@ -149,6 +149,8 @@ class SetupWizardActivity : AppCompatActivity() {
     }
 
     setContentView(R.layout.activity_setup_wizard)
+    EdgeToEdgeHelper.enable(this)
+    EdgeToEdgeHelper.applySystemBarPadding(findViewById(R.id.setup_scroll))
 
     val setupRoot: View = findViewById(R.id.setup_root)
     val setupCard: View = findViewById(R.id.setup_card)

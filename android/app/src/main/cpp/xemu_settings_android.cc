@@ -67,7 +67,7 @@ static void xemu_settings_apply_defaults(void)
     g_config.input.keyboard_controller_scancode_map.rstick_down = 14;
     g_config.input.keyboard_controller_scancode_map.rtrigger = 18;
 
-    g_config.display.renderer = CONFIG_DISPLAY_RENDERER_VULKAN;
+    g_config.display.renderer = CONFIG_DISPLAY_RENDERER_OPENGL;
     g_config.display.filtering = CONFIG_DISPLAY_FILTERING_LINEAR;
     g_config.display.quality.surface_scale = 1;
     g_config.display.window.fullscreen_on_startup = false;
@@ -76,7 +76,7 @@ static void xemu_settings_apply_defaults(void)
         CONFIG_DISPLAY_WINDOW_STARTUP_SIZE_1280X960;
     g_config.display.window.last_width = 640;
     g_config.display.window.last_height = 480;
-    g_config.display.window.vsync = false;
+    g_config.display.window.vsync = true;
     g_config.display.ui.show_menubar = true;
     g_config.display.ui.show_notifications = true;
     g_config.display.ui.hide_cursor = true;
@@ -392,8 +392,8 @@ bool xemu_settings_load(void)
         if (auto audio_driver = android_cfg["audio_driver"].value<std::string>()) {
             std::string driver = *audio_driver;
             std::string normalized = to_lower_ascii(driver);
-            if (normalized == "audiotrack") {
-                setenv("XEMU_ANDROID_AUDIO_DRIVER", "android", 1);
+            if (normalized == "audiotrack" || normalized == "android") {
+                setenv("XEMU_ANDROID_AUDIO_DRIVER", "opensles", 1);
             } else if (normalized == "opensl" || normalized == "opensles") {
                 setenv("XEMU_ANDROID_AUDIO_DRIVER", "opensles", 1);
             } else if (normalized == "auto" || normalized == "default") {

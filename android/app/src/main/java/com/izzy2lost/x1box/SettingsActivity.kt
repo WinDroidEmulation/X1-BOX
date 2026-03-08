@@ -78,6 +78,8 @@ class SettingsActivity : AppCompatActivity() {
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
     setContentView(R.layout.activity_settings)
+    EdgeToEdgeHelper.enable(this)
+    EdgeToEdgeHelper.applySystemBarPadding(findViewById(R.id.settings_scroll))
 
     val toggleGraphicsApi = findViewById<MaterialButtonToggleGroup>(R.id.toggle_graphics_api)
     val toggleFiltering   = findViewById<MaterialButtonToggleGroup>(R.id.toggle_filtering)
@@ -109,7 +111,7 @@ class SettingsActivity : AppCompatActivity() {
     dropdownEepromVideoStandard = findViewById(R.id.dropdown_eeprom_video_standard)
 
     // Load current values
-    val renderer = prefs.getString("setting_renderer", "vulkan") ?: "vulkan"
+    val renderer = prefs.getString("setting_renderer", "opengl") ?: "opengl"
     if (renderer == "opengl") {
       toggleGraphicsApi.check(R.id.btn_renderer_opengl)
     } else {
@@ -164,7 +166,7 @@ class SettingsActivity : AppCompatActivity() {
     switchHrtf.isChecked    = prefs.getBoolean("setting_hrtf", true)
     switchShaders.isChecked = prefs.getBoolean("setting_cache_shaders", true)
     switchFpu.isChecked     = prefs.getBoolean("setting_hard_fpu", true)
-    switchVsync.isChecked   = prefs.getBoolean("setting_vsync", false)
+    switchVsync.isChecked   = prefs.getBoolean("setting_vsync", true)
     switchSkipBootAnim.isChecked =
       prefs.getBoolean("setting_skip_boot_anim", false)
 
