@@ -1,6 +1,7 @@
 package com.izzy2lost.x1box
 
 import android.content.Context
+import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
 import android.provider.OpenableColumns
@@ -101,6 +102,7 @@ class SettingsActivity : AppCompatActivity() {
     val switchSkipBootAnim = findViewById<MaterialSwitch>(R.id.switch_skip_boot_anim)
     val toggleAudioDriver = findViewById<MaterialButtonToggleGroup>(R.id.toggle_audio_driver)
     val btnSave           = findViewById<MaterialButton>(R.id.btn_settings_save)
+    val btnRedoSetup      = findViewById<MaterialButton>(R.id.btn_redo_setup_wizard)
     tvVulkanDriverName    = findViewById(R.id.tv_vulkan_driver_name)
     val btnVulkanBrowse   = findViewById<MaterialButton>(R.id.btn_vulkan_browse)
     val btnVulkanClear    = findViewById<MaterialButton>(R.id.btn_vulkan_clear)
@@ -186,6 +188,12 @@ class SettingsActivity : AppCompatActivity() {
       pendingVulkanName = null
       clearVulkan = true
       tvVulkanDriverName.text = getString(R.string.settings_vulkan_driver_none)
+    }
+
+    btnRedoSetup.setOnClickListener {
+      prefs.edit().putBoolean("setup_complete", false).apply()
+      startActivity(Intent(this, SetupWizardActivity::class.java))
+      finish()
     }
 
     setupEepromEditor()

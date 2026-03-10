@@ -1087,11 +1087,13 @@ class GameLibraryActivity : AppCompatActivity() {
 
   private fun launchGame(game: GameEntry) {
     persistUriPermission(game.uri)
+    // MainActivity runs in :xemu, so the disc selection must be flushed before
+    // the other process reads SharedPreferences during startup.
     prefs.edit()
       .putString("dvdUri", game.uri.toString())
       .remove("dvdPath")
       .putBoolean("skip_game_picker", false)
-      .apply()
+      .commit()
 
     startActivity(Intent(this, MainActivity::class.java))
     finish()

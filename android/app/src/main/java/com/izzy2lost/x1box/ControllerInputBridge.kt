@@ -24,10 +24,9 @@ class ControllerInputBridge : OnScreenController.ControllerListener {
   override fun onButtonPressed(button: OnScreenController.Button) {
     try {
       when (button) {
-        OnScreenController.Button.LEFT_TRIGGER ->
-          SDLControllerManager.onNativeJoy(VIRTUAL_DEVICE_ID, AXIS_LEFT_TRIGGER, 1.0f)
+        OnScreenController.Button.LEFT_TRIGGER,
         OnScreenController.Button.RIGHT_TRIGGER ->
-          SDLControllerManager.onNativeJoy(VIRTUAL_DEVICE_ID, AXIS_RIGHT_TRIGGER, 1.0f)
+          setTriggerState(button, pressed = true)
         else -> {
           val keyCode = getKeyCodeForButton(button)
           SDLControllerManager.onNativePadDown(VIRTUAL_DEVICE_ID, keyCode)
@@ -41,10 +40,9 @@ class ControllerInputBridge : OnScreenController.ControllerListener {
   override fun onButtonReleased(button: OnScreenController.Button) {
     try {
       when (button) {
-        OnScreenController.Button.LEFT_TRIGGER ->
-          SDLControllerManager.onNativeJoy(VIRTUAL_DEVICE_ID, AXIS_LEFT_TRIGGER, 0.0f)
+        OnScreenController.Button.LEFT_TRIGGER,
         OnScreenController.Button.RIGHT_TRIGGER ->
-          SDLControllerManager.onNativeJoy(VIRTUAL_DEVICE_ID, AXIS_RIGHT_TRIGGER, 0.0f)
+          setTriggerState(button, pressed = false)
         else -> {
           val keyCode = getKeyCodeForButton(button)
           SDLControllerManager.onNativePadUp(VIRTUAL_DEVICE_ID, keyCode)
@@ -93,6 +91,34 @@ class ControllerInputBridge : OnScreenController.ControllerListener {
       SDLControllerManager.onNativePadUp(VIRTUAL_DEVICE_ID, keyCode)
     } catch (e: Exception) {
       android.util.Log.e("ControllerBridge", "Error on stick release: ${e.message}")
+    }
+  }
+
+  private fun setTriggerState(button: OnScreenController.Button, pressed: Boolean) {
+    val keyCode = getKeyCodeForButton(button)
+    val axis = when (button) {
+      OnScreenController.Button.LEFT_TRIGGER -> AXIS_LEFT_TRIGGER
+      OnScreenController.Button.RIGHT_TRIGGER -> AXIS_RIGHT_TRIGGER
+      else -> return
+    }
+    // SDL maps the raw joystick axis (-1..1) to the game controller trigger
+    // axis (0..1) as: output = (raw + 1) / 2. So 0.0f → 50% pressed, not 0%.
+    // Use -1.0f for release so SDL computes output = 0 (fully released).
+    val axisValue = if (pressed) 1.0f else -1.0f
+
+    try {
+      if (pressed) {
+        SDLControllerManager.onNativePadDown(VIRTUAL_DEVICE_ID, keyCode)
+      } else {
+        SDLControllerManager.onNativePadUp(VIRTUAL_DEVICE_ID, keyCode)
+      }
+    } catch (e: Exception) {
+      android.util.Log.e("ControllerBridge", "SDL pad event failed for $button: ${e.message}")
+    }
+    try {
+      SDLControllerManager.onNativeJoy(VIRTUAL_DEVICE_ID, axis, axisValue)
+    } catch (e: Exception) {
+      android.util.Log.e("ControllerBridge", "SDL joy event failed for $button: ${e.message}")
     }
   }
 
