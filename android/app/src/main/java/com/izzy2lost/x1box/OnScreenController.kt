@@ -8,6 +8,8 @@ import android.graphics.PointF
 import android.util.AttributeSet
 import android.view.MotionEvent
 import android.view.View
+import android.view.ViewConfiguration
+import kotlin.math.max
 import kotlin.math.pow
 import kotlin.math.sqrt
 
@@ -25,6 +27,21 @@ class OnScreenController @JvmOverloads constructor(
   private var menuButtonRadius = 0f
   private var menuButtonPressed = false
   private var menuButtonPointerId = -1
+  private val swipeTouchSlop = ViewConfiguration.get(context).scaledTouchSlop.toFloat()
+  private val swipeUpGestureRecognizer = SwipeUpGestureRecognizer(
+    minDistancePx = {
+      max(height * 0.14f, swipeTouchSlop * 8f)
+    },
+    touchSlopPx = { swipeTouchSlop },
+    canStartAt = { x, y ->
+      y >= height * 0.35f && !isPointInInteractiveElement(x, y)
+    },
+    onTriggered = {
+      handleCancel()
+      onMenuButtonTapped?.invoke()
+      invalidate()
+    },
+  )
 
   var onMenuButtonTapped: (() -> Unit)? = null
 
@@ -323,6 +340,11 @@ class OnScreenController @JvmOverloads constructor(
   }
 
   override fun onTouchEvent(event: MotionEvent): Boolean {
+    if (swipeUpGestureRecognizer.onTouchEvent(event)) {
+      invalidate()
+      return true
+    }
+
     val pointerIndex = event.actionIndex
     val pointerId = event.getPointerId(pointerIndex)
     val x = event.getX(pointerIndex)
@@ -450,6 +472,8 @@ class OnScreenController @JvmOverloads constructor(
   }
 
   private fun handleCancel() {
+    swipeUpGestureRecognizer.reset()
+
     if (menuButtonPointerId != -1) {
       menuButtonPressed = false
       menuButtonPointerId = -1
@@ -532,6 +556,18 @@ class OnScreenController @JvmOverloads constructor(
     val dx = x - center.x
     val dy = y - center.y
     return sqrt(dx.pow(2) + dy.pow(2)) <= radius
+  }
+
+  private fun isPointInInteractiveElement(x: Float, y: Float): Boolean {
+    if (isPointInCircle(x, y, menuButtonCenter, menuButtonRadius)) {
+      return true
+    }
+
+    if (sticks.values.any { isPointInCircle(x, y, it.center, it.radius) }) {
+      return true
+    }
+
+    return buttons.values.any { isPointInCircle(x, y, it.center, it.radius) }
   }
 
   fun setVisibility(visible: Boolean) {

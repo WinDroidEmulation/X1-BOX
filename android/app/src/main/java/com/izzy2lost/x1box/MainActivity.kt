@@ -11,11 +11,13 @@ import android.os.Process
 import android.util.Log
 import android.view.InputDevice
 import android.view.KeyEvent
+import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.view.WindowInsets
 import android.view.WindowInsetsController
 import android.view.WindowManager
+import android.view.ViewConfiguration
 import android.widget.BaseAdapter
 import android.widget.FrameLayout
 import android.widget.ImageView
@@ -30,6 +32,7 @@ import org.libsdl.app.SDLSurface
 import java.io.File
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import kotlin.math.max
 
 class MainActivity : SDLActivity(), InputManager.InputDeviceListener {
   companion object {
@@ -58,6 +61,7 @@ class MainActivity : SDLActivity(), InputManager.InputDeviceListener {
   private var startupSnapshotSlot: Int? = null
   private var startupSnapshotLoadScheduled = false
   @Volatile private var processTerminationScheduled = false
+  private lateinit var swipeUpGestureRecognizer: SwipeUpGestureRecognizer
 
   override fun createSDLSurface(context: Context): SDLSurface {
     return super.createSDLSurface(context).apply {
@@ -76,6 +80,7 @@ class MainActivity : SDLActivity(), InputManager.InputDeviceListener {
     if (requestedSlot in 1..TOTAL_SNAPSHOT_SLOTS) {
       startupSnapshotSlot = requestedSlot
     }
+    initializeSwipeMenuGesture()
     setupOnScreenController()
     setupControllerDetection()
     hideSystemUI()
@@ -121,6 +126,16 @@ class MainActivity : SDLActivity(), InputManager.InputDeviceListener {
     return super.dispatchKeyEvent(event)
   }
 
+  override fun dispatchTouchEvent(event: MotionEvent): Boolean {
+    if (shouldHandleActivitySwipeMenu() && swipeUpGestureRecognizer.onTouchEvent(event)) {
+      return true
+    }
+    if (!shouldHandleActivitySwipeMenu()) {
+      swipeUpGestureRecognizer.reset()
+    }
+    return super.dispatchTouchEvent(event)
+  }
+
   private fun hideSystemUI() {
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
       // Android 11 (API 30) and above
@@ -142,6 +157,23 @@ class MainActivity : SDLActivity(), InputManager.InputDeviceListener {
         or View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
       )
     }
+  }
+
+  private fun initializeSwipeMenuGesture() {
+    val swipeTouchSlop = ViewConfiguration.get(this).scaledTouchSlop.toFloat()
+    swipeUpGestureRecognizer = SwipeUpGestureRecognizer(
+      minDistancePx = {
+        max(currentGestureHostHeight() * 0.14f, swipeTouchSlop * 8f)
+      },
+      touchSlopPx = { swipeTouchSlop },
+      canStartAt = { _, y ->
+        y >= currentGestureHostHeight() * 0.35f
+      },
+      onTriggered = {
+        onScreenController?.resetAllInputs()
+        showInGameMenu()
+      },
+    )
   }
 
   private fun setupOnScreenController() {
@@ -180,6 +212,7 @@ class MainActivity : SDLActivity(), InputManager.InputDeviceListener {
   }
 
   override fun onPause() {
+    swipeUpGestureRecognizer.reset()
     onScreenController?.resetAllInputs()
     super.onPause()
   }
@@ -267,6 +300,7 @@ class MainActivity : SDLActivity(), InputManager.InputDeviceListener {
     
     if (shouldShow != isControllerVisible) {
       isControllerVisible = shouldShow
+      swipeUpGestureRecognizer.reset()
       onScreenController?.visibility = if (shouldShow) View.VISIBLE else View.GONE
     }
   }
@@ -292,6 +326,7 @@ class MainActivity : SDLActivity(), InputManager.InputDeviceListener {
 
   override fun onDestroy() {
     Log.i(TAG, "onDestroy()")
+    swipeUpGestureRecognizer.reset()
     inGameMenuDialog?.dismiss()
     inGameMenuDialog = null
     val shouldTerminateProcess = isFinishing && !isChangingConfigurations
@@ -665,6 +700,11 @@ class MainActivity : SDLActivity(), InputManager.InputDeviceListener {
   }
 
   private fun showInGameMenu() {
+    swipeUpGestureRecognizer.reset()
+    if (inGameMenuDialog?.isShowing == true) {
+      return
+    }
+
     val options = arrayOf(
       getString(R.string.in_game_menu_resume),
       if (isControllerVisible) {
@@ -698,6 +738,15 @@ class MainActivity : SDLActivity(), InputManager.InputDeviceListener {
 
     inGameMenuDialog = dialog
     dialog.show()
+  }
+
+  private fun shouldHandleActivitySwipeMenu(): Boolean {
+    return !isControllerVisible && inGameMenuDialog?.isShowing != true
+  }
+
+  private fun currentGestureHostHeight(): Float {
+    val hostHeight = mLayout?.height ?: window.decorView.height
+    return max(hostHeight, 1).toFloat()
   }
 
   private fun exitToGameLibrary() {
