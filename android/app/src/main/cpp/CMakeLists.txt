@@ -9,9 +9,9 @@ include(FetchContent)
 include(ExternalProject)
 
 get_filename_component(REPO_ROOT "${CMAKE_CURRENT_LIST_DIR}/../../../../.." ABSOLUTE)
-find_program(PYTHON_EXECUTABLE python)
+find_program(PYTHON_EXECUTABLE NAMES python3 python)
 if(NOT PYTHON_EXECUTABLE)
-  message(FATAL_ERROR "python not found in PATH; required for QAPI/trace generation")
+  message(FATAL_ERROR "python3/python not found in PATH; required for QAPI/trace generation")
 endif()
 
 option(XEMU_ENABLE_VULKAN "Enable Vulkan renderer" ON)
@@ -23,6 +23,11 @@ if(CARGO_EXECUTABLE MATCHES "-NOTFOUND$" OR NOT CARGO_EXECUTABLE)
     file(TO_CMAKE_PATH "$ENV{USERPROFILE}/.cargo/bin/cargo.exe" CARGO_USERPROFILE_BIN)
     if(EXISTS "${CARGO_USERPROFILE_BIN}")
       set(CARGO_EXECUTABLE "${CARGO_USERPROFILE_BIN}" CACHE FILEPATH "Path to cargo executable" FORCE)
+    endif()
+  elseif(DEFINED ENV{HOME})
+    file(TO_CMAKE_PATH "$ENV{HOME}/.cargo/bin/cargo" CARGO_HOME_BIN)
+    if(EXISTS "${CARGO_HOME_BIN}")
+      set(CARGO_EXECUTABLE "${CARGO_HOME_BIN}" CACHE FILEPATH "Path to cargo executable" FORCE)
     endif()
   endif()
 endif()
@@ -165,7 +170,25 @@ if(NOT ANDROID_API)
 endif()
 
 set(ANDROID_TRIPLE "aarch64-none-linux-android${ANDROID_API}")
-set(NDK_TOOLCHAIN "${NDK_PATH}/toolchains/llvm/prebuilt/windows-x86_64/bin")
+if(CMAKE_HOST_WIN32)
+  set(NDK_HOST_TAG "windows-x86_64")
+elseif(CMAKE_HOST_APPLE)
+  if(CMAKE_HOST_SYSTEM_PROCESSOR MATCHES "^(arm64|aarch64)$")
+    set(NDK_HOST_TAG "darwin-arm64")
+  else()
+    set(NDK_HOST_TAG "darwin-x86_64")
+  endif()
+elseif(CMAKE_HOST_UNIX)
+  set(NDK_HOST_TAG "linux-x86_64")
+else()
+  message(FATAL_ERROR "Unsupported host platform for Android NDK: ${CMAKE_HOST_SYSTEM_NAME}")
+endif()
+
+set(NDK_PREBUILT_DIR "${NDK_PATH}/toolchains/llvm/prebuilt/${NDK_HOST_TAG}")
+if(NOT EXISTS "${NDK_PREBUILT_DIR}")
+  message(FATAL_ERROR "Android NDK host toolchain not found at ${NDK_PREBUILT_DIR}")
+endif()
+set(NDK_TOOLCHAIN "${NDK_PREBUILT_DIR}/bin")
 
 if(XEMU_XISO_CONVERTER_BUILD_ENABLED)
   if(CMAKE_HOST_WIN32)
@@ -276,7 +299,7 @@ file(WRITE "${GLIB_CROSS_FILE}"
 "\n"
 "[properties]\n"
 "needs_exe_wrapper = true\n"
-"sys_root = '${NDK_PATH}/toolchains/llvm/prebuilt/windows-x86_64/sysroot'\n"
+"sys_root = '${NDK_PREBUILT_DIR}/sysroot'\n"
 "c_args = ['--target=${ANDROID_TRIPLE}', '-I${CMAKE_CURRENT_LIST_DIR}/iconv_stub']\n"
 "cpp_args = ['--target=${ANDROID_TRIPLE}', '-I${CMAKE_CURRENT_LIST_DIR}/iconv_stub']\n"
 "c_link_args = ['--target=${ANDROID_TRIPLE}', '-L${ICONV_STUB_DIR}', '-liconv']\n"

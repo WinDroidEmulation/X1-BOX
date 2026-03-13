@@ -135,10 +135,32 @@ static uint64_t g_android_frame_counter = 0;
 static int g_android_target_fps = 60;
 static int64_t g_android_frame_interval_ns = 16666666;
 static int g_android_display_mode = 0; /* 0=stretch, 1=4:3, 2=16:9 */
+static int g_android_render_logs_enabled = -1;
 
 static bool sdl2_is_render_thread(void)
 {
     return sdl_render_thread_id != 0 && SDL_ThreadID() == sdl_render_thread_id;
+}
+
+static bool android_render_logs_enabled(void)
+{
+    if (g_android_render_logs_enabled < 0) {
+        const char *value = SDL_getenv("XEMU_ANDROID_RENDER_LOGS");
+        g_android_render_logs_enabled =
+            (value && value[0] != '\0' && value[0] != '0') ? 1 : 0;
+        if (g_android_render_logs_enabled) {
+            __android_log_print(ANDROID_LOG_INFO, "xemu-android",
+                                "android: verbose render logging enabled");
+        }
+    }
+    return g_android_render_logs_enabled != 0;
+}
+
+static bool android_should_log_render_periodic(uint64_t period)
+{
+    return android_render_logs_enabled() &&
+           period != 0 &&
+           (g_android_frame_counter % period) == 0;
 }
 
 static bool sdl2_gl_has_extension(const char *ext_list, const char *ext)
@@ -260,7 +282,7 @@ static void sdl2_gl_render_texture(struct sdl2_console *scon,
     }
 
 #ifdef __ANDROID__
-    if ((g_android_frame_counter % 60) == 0) {
+    if (android_should_log_render_periodic(60)) {
         __android_log_print(ANDROID_LOG_INFO, "xemu-android",
                             "present drawable=%dx%d window=%dx%d viewport=%d,%d %dx%d tex=%u flip=%d mode=%d",
                             w, h, ww, wh, vx, vy, vw, vh,
@@ -1553,13 +1575,14 @@ void sdl2_gl_refresh(DisplayChangeListener *dcl)
         return;
     }
     if (g_android_paused || scon->hidden) {
-        if ((g_android_frame_counter++ % 120) == 0) {
+        if (android_should_log_render_periodic(120)) {
             __android_log_print(ANDROID_LOG_INFO, "xemu-android",
                                 "refresh paused: hidden=%d paused=%d runstate=%d",
                                 scon->hidden ? 1 : 0,
                                 g_android_paused ? 1 : 0,
                                 (int)runstate_get());
         }
+        g_android_frame_counter++;
         qemu_mutex_lock_main_loop();
         bql_lock();
         sdl2_poll_events(scon);
@@ -1604,7 +1627,7 @@ void sdl2_gl_refresh(DisplayChangeListener *dcl)
     GLuint tex = nv2a_get_framebuffer_surface();
 #ifdef __ANDROID__
     if (tex != 0 && glIsTexture(tex) == GL_FALSE) {
-        if ((g_android_frame_counter % 120) == 0) {
+        if (android_should_log_render_periodic(120)) {
             __android_log_print(ANDROID_LOG_WARN, "xemu-android",
                                 "refresh: nv2a tex %u not valid in display context",
                                 (unsigned)tex);
@@ -1614,7 +1637,7 @@ void sdl2_gl_refresh(DisplayChangeListener *dcl)
 #endif
 #ifdef __ANDROID__
     android_log_gl_error("refresh-get-fb");
-    if ((g_android_frame_counter % 120) == 0) {
+    if (android_should_log_render_periodic(120)) {
         __android_log_print(ANDROID_LOG_INFO, "xemu-android",
                             "refresh frame=%llu tex=%u flip=%d surface=%p size=%dx%d runstate=%d",
                             (unsigned long long)g_android_frame_counter,
@@ -1641,7 +1664,7 @@ void sdl2_gl_refresh(DisplayChangeListener *dcl)
         tex = scon->surface->texture;
         flip_required = true;
 #ifdef __ANDROID__
-        if ((g_android_frame_counter % 120) == 0) {
+        if (android_should_log_render_periodic(120)) {
             __android_log_print(ANDROID_LOG_INFO, "xemu-android",
                                 "refresh no nv2a fb, using surface texture=%u",
                                 (unsigned)tex);
