@@ -5,6 +5,7 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
 import android.provider.OpenableColumns
+import android.text.format.Formatter
 import android.widget.ArrayAdapter
 import android.widget.AutoCompleteTextView
 import android.widget.TextView
@@ -81,9 +82,11 @@ class SettingsActivity : AppCompatActivity() {
   private var pendingVulkanUri: String? = null
   private var pendingVulkanName: String? = null
   private var clearVulkan = false
+  private var isInitializingHdd = false
 
   private lateinit var tvVulkanDriverName: TextView
   private lateinit var tvEepromStatus: TextView
+  private lateinit var tvHddToolsStatus: TextView
   private lateinit var inputEepromLanguage: TextInputLayout
   private lateinit var inputEepromVideoStandard: TextInputLayout
   private lateinit var inputEepromAspectRatio: TextInputLayout
@@ -141,10 +144,12 @@ class SettingsActivity : AppCompatActivity() {
     val btnSave           = findViewById<MaterialButton>(R.id.btn_settings_save)
     val btnRedoSetup      = findViewById<MaterialButton>(R.id.btn_redo_setup_wizard)
     val btnClearCache     = findViewById<MaterialButton>(R.id.btn_clear_system_cache)
+    val btnInitializeRetailHdd = findViewById<MaterialButton>(R.id.btn_initialize_retail_hdd)
     tvVulkanDriverName    = findViewById(R.id.tv_vulkan_driver_name)
     val btnVulkanBrowse   = findViewById<MaterialButton>(R.id.btn_vulkan_browse)
     val btnVulkanClear    = findViewById<MaterialButton>(R.id.btn_vulkan_clear)
     tvEepromStatus        = findViewById(R.id.tv_eeprom_status)
+    tvHddToolsStatus      = findViewById(R.id.tv_hdd_tools_status)
     inputEepromLanguage   = findViewById(R.id.input_eeprom_language)
     inputEepromVideoStandard = findViewById(R.id.input_eeprom_video_standard)
     inputEepromAspectRatio = findViewById(R.id.input_eeprom_aspect_ratio)
@@ -242,6 +247,7 @@ class SettingsActivity : AppCompatActivity() {
     }
 
     setupEepromEditor()
+    refreshHddToolsPreview(btnInitializeRetailHdd)
 
     fun persistSettings(): Pair<Int, Int> {
       val selectedDisplayMode = when (toggleDisplayMode.checkedButtonId) {
@@ -313,6 +319,10 @@ class SettingsActivity : AppCompatActivity() {
 
     btnClearCache.setOnClickListener {
       showClearCacheConfirmation()
+    }
+
+    btnInitializeRetailHdd.setOnClickListener {
+      showInitializeHddLayoutPicker(btnInitializeRetailHdd)
     }
 
     btnSave.setOnClickListener {
@@ -538,6 +548,216 @@ class SettingsActivity : AppCompatActivity() {
       .show()
   }
 
+  private fun showInitializeHddLayoutPicker(button: MaterialButton) {
+    val hddFile = resolveHddFile()
+    if (hddFile == null) {
+      refreshHddToolsPreview(button)
+      return
+    }
+
+    val inspection = runCatching { XboxHddFormatter.inspect(hddFile) }.getOrElse { error ->
+      tvHddToolsStatus.text = getString(
+        R.string.settings_hdd_status_error,
+        error.message ?: hddFile.absolutePath,
+      )
+      button.isEnabled = false
+      return
+    }
+
+    if (!inspection.supportsRetailFormat) {
+      refreshHddToolsState(button)
+      return
+    }
+
+    val supportedLayouts = XboxHddFormatter.supportedLayouts(inspection).toSet()
+    if (supportedLayouts.isEmpty()) {
+      refreshHddToolsState(button)
+      return
+    }
+
+    val allLayouts = XboxHddFormatter.Layout.entries
+    val labels = allLayouts
+      .map { layout ->
+        val label = getString(hddLayoutLabelRes(layout))
+        val availability = XboxHddFormatter.availabilityFor(inspection, layout)
+        if (availability == XboxHddFormatter.LayoutAvailability.AVAILABLE) {
+          label
+        } else {
+          getString(
+            R.string.settings_hdd_layout_unavailable_format,
+            label,
+            getString(hddLayoutUnavailableReasonRes(availability)),
+          )
+        }
+      }
+      .toTypedArray()
+    MaterialAlertDialogBuilder(this, R.style.ThemeOverlay_Xemu_RoundedDialog)
+      .setTitle(R.string.settings_hdd_layout_pick_title)
+      .setItems(labels) { _, which ->
+        val layout = allLayouts[which]
+        val availability = XboxHddFormatter.availabilityFor(inspection, layout)
+        if (availability == XboxHddFormatter.LayoutAvailability.AVAILABLE) {
+          showInitializeHddConfirmation(hddFile, layout, button)
+        } else {
+          MaterialAlertDialogBuilder(this, R.style.ThemeOverlay_Xemu_RoundedDialog)
+            .setTitle(R.string.settings_hdd_layout_unavailable_title)
+            .setMessage(getString(hddLayoutUnavailableReasonRes(availability)))
+            .setPositiveButton(android.R.string.ok, null)
+            .show()
+        }
+      }
+      .setNegativeButton(android.R.string.cancel, null)
+      .show()
+  }
+
+  private fun showInitializeHddConfirmation(
+    hddFile: File,
+    layout: XboxHddFormatter.Layout,
+    button: MaterialButton,
+  ) {
+    MaterialAlertDialogBuilder(this, R.style.ThemeOverlay_Xemu_RoundedDialog)
+      .setTitle(R.string.settings_hdd_init_title)
+      .setMessage(
+        getString(
+          R.string.settings_hdd_init_message,
+          getString(hddLayoutLabelRes(layout)),
+          getString(hddLayoutSummaryRes(layout)),
+          hddFile.absolutePath,
+        )
+      )
+      .setPositiveButton(R.string.settings_hdd_init_action) { _, _ ->
+        initializeHddLayout(hddFile, layout, button)
+      }
+      .setNegativeButton(android.R.string.cancel, null)
+      .show()
+  }
+
+  private fun initializeHddLayout(
+    hddFile: File,
+    layout: XboxHddFormatter.Layout,
+    button: MaterialButton,
+  ) {
+    if (isInitializingHdd) {
+      return
+    }
+
+    isInitializingHdd = true
+    button.isEnabled = false
+    Toast.makeText(this, R.string.settings_hdd_init_working, Toast.LENGTH_SHORT).show()
+
+    Thread {
+      val result = runCatching {
+        XboxHddFormatter.initialize(hddFile, layout)
+      }
+
+      runOnUiThread {
+        isInitializingHdd = false
+        refreshHddToolsState(button)
+        result.onSuccess {
+          Toast.makeText(this, R.string.settings_hdd_init_success, Toast.LENGTH_SHORT).show()
+        }.onFailure { error ->
+          Toast.makeText(
+            this,
+            getString(
+              R.string.settings_hdd_init_failed,
+              error.message ?: hddFile.absolutePath,
+            ),
+            Toast.LENGTH_LONG,
+          ).show()
+        }
+      }
+    }.start()
+  }
+
+  private fun refreshHddToolsState(button: MaterialButton) {
+    val hddFile = resolveHddFile()
+    if (hddFile == null) {
+      tvHddToolsStatus.text = getString(R.string.settings_hdd_status_missing)
+      button.isEnabled = false
+      return
+    }
+
+    val inspection = runCatching { XboxHddFormatter.inspect(hddFile) }.getOrElse { error ->
+      tvHddToolsStatus.text = getString(
+        R.string.settings_hdd_status_error,
+        error.message ?: hddFile.absolutePath,
+      )
+      button.isEnabled = false
+      return
+    }
+
+    val sizeLabel = Formatter.formatFileSize(this, inspection.totalBytes)
+    val formatLabel = getString(hddFormatLabelRes(inspection.format))
+    tvHddToolsStatus.text = when {
+      inspection.totalBytes < XboxHddFormatter.MINIMUM_RETAIL_DISK_BYTES -> getString(
+        R.string.settings_hdd_status_too_small,
+        formatLabel,
+        sizeLabel,
+        hddFile.absolutePath,
+      )
+      else -> getString(
+        R.string.settings_hdd_status_ready,
+        formatLabel,
+        sizeLabel,
+        hddFile.absolutePath,
+      )
+    }
+    button.isEnabled = !isInitializingHdd && XboxHddFormatter.supportedLayouts(inspection).isNotEmpty()
+  }
+
+  private fun refreshHddToolsPreview(button: MaterialButton) {
+    val hddFile = resolveHddFile()
+    if (hddFile == null || !hddFile.isFile) {
+      tvHddToolsStatus.text = getString(R.string.settings_hdd_status_missing)
+      button.isEnabled = false
+      return
+    }
+
+    tvHddToolsStatus.text = getString(
+      R.string.settings_hdd_status_configured,
+      hddFile.absolutePath,
+    )
+    button.isEnabled = !isInitializingHdd
+  }
+
+  private fun hddFormatLabelRes(format: XboxHddFormatter.ImageFormat): Int {
+    return when (format) {
+      XboxHddFormatter.ImageFormat.RAW -> R.string.settings_hdd_format_raw
+      XboxHddFormatter.ImageFormat.QCOW2 -> R.string.settings_hdd_format_qcow2
+    }
+  }
+
+  private fun hddLayoutLabelRes(layout: XboxHddFormatter.Layout): Int {
+    return when (layout) {
+      XboxHddFormatter.Layout.RETAIL -> R.string.settings_hdd_layout_retail
+      XboxHddFormatter.Layout.RETAIL_PLUS_F -> R.string.settings_hdd_layout_retail_f
+      XboxHddFormatter.Layout.RETAIL_PLUS_F_G -> R.string.settings_hdd_layout_retail_f_g
+    }
+  }
+
+  private fun hddLayoutSummaryRes(layout: XboxHddFormatter.Layout): Int {
+    return when (layout) {
+      XboxHddFormatter.Layout.RETAIL -> R.string.settings_hdd_layout_summary_retail
+      XboxHddFormatter.Layout.RETAIL_PLUS_F -> R.string.settings_hdd_layout_summary_retail_f
+      XboxHddFormatter.Layout.RETAIL_PLUS_F_G -> R.string.settings_hdd_layout_summary_retail_f_g
+    }
+  }
+
+  private fun hddLayoutUnavailableReasonRes(
+    availability: XboxHddFormatter.LayoutAvailability,
+  ): Int {
+    return when (availability) {
+      XboxHddFormatter.LayoutAvailability.AVAILABLE ->
+        R.string.settings_hdd_layout_unavailable_not_enough_space
+      XboxHddFormatter.LayoutAvailability.NO_EXTENDED_SPACE ->
+        R.string.settings_hdd_layout_unavailable_no_extended_space
+      XboxHddFormatter.LayoutAvailability.NEEDS_STANDARD_G_BOUNDARY ->
+        R.string.settings_hdd_layout_unavailable_needs_standard_g_boundary
+      XboxHddFormatter.LayoutAvailability.NOT_ENOUGH_SPACE ->
+        R.string.settings_hdd_layout_unavailable_not_enough_space
+    }
+  }
+
   private fun clearSystemCache(): CacheClearResult {
     var result = CacheClearResult(0, false)
 
@@ -630,6 +850,12 @@ class SettingsActivity : AppCompatActivity() {
   private fun resolveEepromFile(): File {
     val base = getExternalFilesDir(null) ?: filesDir
     return File(File(base, "x1box"), "eeprom.bin")
+  }
+
+  private fun resolveHddFile(): File? {
+    val path = prefs.getString("hddPath", null) ?: return null
+    val file = File(path)
+    return file.takeIf { it.isFile }
   }
 
   private fun getFileName(uri: Uri): String? {

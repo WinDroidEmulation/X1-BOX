@@ -950,6 +950,7 @@ add_library(xemu SHARED
   xemu_android.cpp
   android_crash_handler.cpp
   vmstate_if_android.c
+  xemu_hdd_tools_jni.c
 )
 
 target_compile_definitions(xemu PRIVATE ANDROID __ANDROID__ XBOX CONFIG_SDL CONFIG_OPENGL)
