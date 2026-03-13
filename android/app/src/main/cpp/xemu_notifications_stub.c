@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <string.h>
 
 #include <SDL_system.h>
 #include <jni.h>
@@ -49,11 +50,23 @@ static void xemu_android_show_toast(const char *msg, int duration)
     (*env)->DeleteLocalRef(env, activity_class);
 }
 
+static int xemu_android_should_suppress_toast(const char *msg)
+{
+    if (!msg) {
+        return 0;
+    }
+
+    return strncmp(msg, "Connected '", 11) == 0 &&
+           strstr(msg, "' to port ") != NULL;
+}
+
 void xemu_queue_notification(const char *msg)
 {
     if (msg) {
         fprintf(stderr, "[xemu] %s\n", msg);
-        xemu_android_show_toast(msg, 0);
+        if (!xemu_android_should_suppress_toast(msg)) {
+            xemu_android_show_toast(msg, 0);
+        }
     }
 }
 
