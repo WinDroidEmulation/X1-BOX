@@ -30,7 +30,6 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.documentfile.provider.DocumentFile
 import coil.load
 import com.google.android.material.button.MaterialButton
-import com.google.android.material.button.MaterialButtonToggleGroup
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.materialswitch.MaterialSwitch
 import java.io.File
@@ -107,19 +106,18 @@ class GameLibraryActivity : AppCompatActivity() {
   private val coverEntries = ArrayList<CoverEntry>()
   @Volatile private var coverIndexLoaded = false
 
-  private lateinit var folderText: TextView
   private lateinit var loadingSpinner: ProgressBar
   private lateinit var loadingText: TextView
   private lateinit var emptyText: TextView
   private lateinit var gamesListContainer: LinearLayout
   private lateinit var gamesGridContainer: LinearLayout
-  private lateinit var btnChangeFolder: MaterialButton
   private lateinit var btnBootDashboard: MaterialButton
   private lateinit var btnSettings: MaterialButton
   private lateinit var btnSnapshots: MaterialButton
   private lateinit var btnConvertIso: MaterialButton
   private lateinit var btnAbout: ImageButton
-  private lateinit var viewModeToggle: MaterialButtonToggleGroup
+  private lateinit var btnViewList: MaterialButton
+  private lateinit var btnViewGrid: MaterialButton
   private lateinit var switchBoxArtLookup: MaterialSwitch
 
   private var gamesFolderUri: Uri? = null
@@ -161,36 +159,29 @@ class GameLibraryActivity : AppCompatActivity() {
       return
     }
 
-    folderText = findViewById(R.id.library_folder_text)
     loadingSpinner = findViewById(R.id.library_loading)
     loadingText = findViewById(R.id.library_loading_text)
     emptyText = findViewById(R.id.library_empty_text)
     gamesListContainer = findViewById(R.id.library_games_container)
     gamesGridContainer = findViewById(R.id.library_games_grid_container)
-    btnChangeFolder = findViewById(R.id.btn_change_games_folder)
     btnBootDashboard = findViewById(R.id.btn_boot_dashboard)
     btnSettings = findViewById(R.id.btn_settings)
     btnSnapshots = findViewById(R.id.btn_snapshots)
     btnConvertIso = findViewById(R.id.btn_convert_iso)
     btnAbout = findViewById(R.id.btn_library_about)
-    viewModeToggle = findViewById(R.id.library_view_mode_toggle)
+    btnViewList = findViewById(R.id.btn_view_list)
+    btnViewGrid = findViewById(R.id.btn_view_grid)
     switchBoxArtLookup = findViewById(R.id.switch_box_art_lookup)
+    btnViewList.isCheckable = true
+    btnViewGrid.isCheckable = true
 
     gamesFolderUri = prefs.getString("gamesFolderUri", null)?.let(Uri::parse)
     useCoverGrid = prefs.getBoolean("library_cover_grid", false)
     boxArtLookupEnabled = prefs.getBoolean("library_box_art_lookup", true)
 
     switchBoxArtLookup.isChecked = boxArtLookupEnabled
-    viewModeToggle.check(if (useCoverGrid) R.id.btn_view_grid else R.id.btn_view_list)
     syncDisplayModeUi()
 
-    btnChangeFolder.setOnClickListener {
-      if (isConvertingIso) {
-        Toast.makeText(this, getString(R.string.library_convert_busy), Toast.LENGTH_SHORT).show()
-        return@setOnClickListener
-      }
-      pickGamesFolder.launch(gamesFolderUri)
-    }
     btnBootDashboard.setOnClickListener {
       if (isConvertingIso) {
         Toast.makeText(this, getString(R.string.library_convert_busy), Toast.LENGTH_SHORT).show()
@@ -210,19 +201,8 @@ class GameLibraryActivity : AppCompatActivity() {
     btnAbout.setOnClickListener {
       showAboutDialog()
     }
-    viewModeToggle.addOnButtonCheckedListener { _, checkedId, isChecked ->
-      if (!isChecked) {
-        return@addOnButtonCheckedListener
-      }
-      val nextGrid = checkedId == R.id.btn_view_grid
-      if (nextGrid == useCoverGrid) {
-        return@addOnButtonCheckedListener
-      }
-      useCoverGrid = nextGrid
-      prefs.edit().putBoolean("library_cover_grid", useCoverGrid).apply()
-      syncDisplayModeUi()
-      renderGames()
-    }
+    btnViewList.setOnClickListener { setDisplayMode(false) }
+    btnViewGrid.setOnClickListener { setDisplayMode(true) }
     switchBoxArtLookup.setOnCheckedChangeListener { _, checked ->
       boxArtLookupEnabled = checked
       prefs.edit().putBoolean("library_box_art_lookup", checked).apply()
@@ -233,7 +213,6 @@ class GameLibraryActivity : AppCompatActivity() {
     updateConvertButtonState()
 
     if (!isFolderReady(gamesFolderUri)) {
-      folderText.text = getString(R.string.library_no_folder)
       Toast.makeText(this, getString(R.string.setup_pick_disc), Toast.LENGTH_SHORT).show()
       pickGamesFolder.launch(gamesFolderUri)
       return
@@ -500,7 +479,7 @@ class GameLibraryActivity : AppCompatActivity() {
             showSnapshotPreviewDialog(preview)
           }
         } else {
-          thumbnail.setImageResource(android.R.drawable.ic_menu_report_image)
+          thumbnail.setImageResource(R.drawable.ic_xemu_image_placeholder)
           previewHint.text = getString(R.string.snapshot_preview_unavailable)
           previewHint.visibility = View.VISIBLE
           thumbnail.setOnClickListener(null)
@@ -532,16 +511,15 @@ class GameLibraryActivity : AppCompatActivity() {
       setLoading(false)
       currentGames = emptyList()
       renderGames()
-      folderText.text = getString(R.string.library_no_folder)
       return
     }
+    val readyFolderUri = folderUri ?: return
 
-    folderText.text = getString(R.string.library_folder_value, formatTreeLabel(folderUri!!))
     setLoading(true, getString(R.string.library_loading_games))
 
     val generation = ++scanGeneration
     Thread {
-      val games = scanFolderForGames(folderUri)
+      val games = scanFolderForGames(readyFolderUri)
       runOnUiThread {
         if (generation != scanGeneration) {
           return@runOnUiThread
@@ -554,9 +532,21 @@ class GameLibraryActivity : AppCompatActivity() {
   }
 
   private fun syncDisplayModeUi() {
+    btnViewList.isChecked = !useCoverGrid
+    btnViewGrid.isChecked = useCoverGrid
     switchBoxArtLookup.visibility = if (useCoverGrid) View.VISIBLE else View.GONE
     gamesListContainer.visibility = if (useCoverGrid) View.GONE else View.VISIBLE
     gamesGridContainer.visibility = if (useCoverGrid) View.VISIBLE else View.GONE
+  }
+
+  private fun setDisplayMode(nextGrid: Boolean) {
+    if (nextGrid == useCoverGrid) {
+      return
+    }
+    useCoverGrid = nextGrid
+    prefs.edit().putBoolean("library_cover_grid", useCoverGrid).apply()
+    syncDisplayModeUi()
+    renderGames()
   }
 
   private fun setLoading(loading: Boolean, message: String? = null) {
@@ -598,13 +588,15 @@ class GameLibraryActivity : AppCompatActivity() {
       val nameText = item.findViewById<TextView>(R.id.game_name_text)
       val sizeText = item.findViewById<TextView>(R.id.game_size_text)
       val pathText = item.findViewById<TextView>(R.id.game_path_text)
+      val coverImage = item.findViewById<ImageView>(R.id.game_list_cover_image)
 
       nameText.text = game.title
       sizeText.text = buildGameSizeText(game)
-      pathText.text = getString(R.string.library_game_path, game.relativePath)
+      pathText.text = game.relativePath
 
       item.setOnClickListener { launchGame(game) }
       item.setOnLongClickListener { showGameContextMenu(game); true }
+      bindCoverArt(coverImage, game)
       gamesListContainer.addView(item)
     }
   }
@@ -639,11 +631,9 @@ class GameLibraryActivity : AppCompatActivity() {
       row!!.addView(item, itemLp)
 
       val nameText = item.findViewById<TextView>(R.id.game_cover_name_text)
-      val sizeText = item.findViewById<TextView>(R.id.game_cover_size_text)
       val coverImage = item.findViewById<ImageView>(R.id.game_cover_image)
 
       nameText.text = game.title
-      sizeText.text = buildGameSizeText(game)
       item.setOnClickListener { launchGame(game) }
       item.setOnLongClickListener { showGameContextMenu(game); true }
       bindCoverArt(coverImage, game)
@@ -673,18 +663,13 @@ class GameLibraryActivity : AppCompatActivity() {
 
   private fun bindCoverArt(coverView: ImageView, game: GameEntry) {
     coverView.tag = game.uri.toString()
+    showCoverPlaceholder(coverView)
 
     val customFile = getCustomCoverFile(game)
     if (customFile.exists()) {
-      coverView.load(customFile) {
-        crossfade(true)
-        placeholder(android.R.drawable.ic_menu_report_image)
-        error(android.R.drawable.ic_menu_report_image)
-      }
+      loadCoverArtIntoView(coverView, customFile)
       return
     }
-
-    coverView.setImageResource(android.R.drawable.ic_menu_report_image)
 
     if (!boxArtLookupEnabled) {
       return
@@ -705,11 +690,35 @@ class GameLibraryActivity : AppCompatActivity() {
   }
 
   private fun applyBoxArtToView(coverView: ImageView, url: String) {
-    coverView.load(url) {
+    loadCoverArtIntoView(coverView, url)
+  }
+
+  private fun loadCoverArtIntoView(coverView: ImageView, model: Any) {
+    coverView.load(model) {
       crossfade(true)
-      placeholder(android.R.drawable.ic_menu_report_image)
-      error(android.R.drawable.ic_menu_report_image)
+      placeholder(R.drawable.ic_xemu_image_placeholder)
+      error(R.drawable.ic_xemu_image_placeholder)
+      listener(
+        onSuccess = { _, _ ->
+          if (coverView.tag != null) {
+            coverView.background = null
+          }
+        },
+        onError = { _, _ ->
+          showCoverPlaceholder(coverView)
+        }
+      )
     }
+  }
+
+  private fun showCoverPlaceholder(coverView: ImageView) {
+    val backgroundRes = if (coverView.id == R.id.game_list_cover_image) {
+      R.drawable.game_list_cover_background
+    } else {
+      R.drawable.game_cover_image_background
+    }
+    coverView.setBackgroundResource(backgroundRes)
+    coverView.setImageResource(R.drawable.ic_xemu_image_placeholder)
   }
 
   private fun lookupBoxArtUrl(title: String): String? {
@@ -936,13 +945,35 @@ class GameLibraryActivity : AppCompatActivity() {
       "${game.title}\n${game.relativePath}"
     }.toTypedArray()
 
-    MaterialAlertDialogBuilder(this)
-      .setTitle(R.string.library_convert_pick_title)
-      .setItems(labels) { _, which ->
-        confirmIsoConversion(isoGames[which])
+    val dp = resources.displayMetrics.density
+    lateinit var convertDialog: androidx.appcompat.app.AlertDialog
+
+    val buttonList = LinearLayout(this).apply {
+      orientation = LinearLayout.VERTICAL
+      setPadding((20 * dp).toInt(), (12 * dp).toInt(), (20 * dp).toInt(), 0)
+      labels.forEachIndexed { i, label ->
+        addView(MaterialButton(this@GameLibraryActivity, null,
+          com.google.android.material.R.attr.materialButtonOutlinedStyle).apply {
+          text = label
+          isAllCaps = false
+          layoutParams = LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+          ).also { lp -> lp.bottomMargin = (8 * dp).toInt() }
+          setOnClickListener {
+            convertDialog.dismiss()
+            confirmIsoConversion(isoGames[i])
+          }
+        })
       }
+    }
+
+    convertDialog = MaterialAlertDialogBuilder(this, R.style.ThemeOverlay_Xemu_RoundedDialog)
+      .setTitle(R.string.library_convert_pick_title)
+      .setView(buttonList)
       .setNegativeButton(android.R.string.cancel, null)
-      .show()
+      .create()
+    convertDialog.show()
   }
 
   private fun confirmIsoConversion(game: GameEntry) {
@@ -1323,11 +1354,16 @@ class GameLibraryActivity : AppCompatActivity() {
 
   private fun toGameTitle(fileName: String): String {
     val lower = fileName.lowercase(Locale.ROOT)
-    return when {
+    val rawTitle = when {
       lower.endsWith(".xiso.iso") -> fileName.dropLast(".xiso.iso".length)
       fileName.contains('.') -> fileName.substringBeforeLast('.')
       else -> fileName
     }
+    val cleanedTitle = rawTitle
+      .replace(Regex("(\\s*(\\([^\\)]*\\)|\\[[^\\]]*\\]))+$"), "")
+      .replace(Regex("\\s+"), " ")
+      .trim()
+    return cleanedTitle.ifEmpty { rawTitle.trim() }
   }
 
   private fun formatSize(bytes: Long): String {
@@ -1370,14 +1406,6 @@ class GameLibraryActivity : AppCompatActivity() {
     return contentResolver.persistedUriPermissions.any { perm ->
       perm.uri == uri && perm.isWritePermission
     }
-  }
-
-  private fun formatTreeLabel(uri: Uri): String {
-    val name = DocumentFile.fromTreeUri(this, uri)?.name
-    if (!name.isNullOrBlank()) {
-      return name
-    }
-    return uri.toString()
   }
 
   private fun dp(value: Int): Int {
@@ -1551,20 +1579,41 @@ class GameLibraryActivity : AppCompatActivity() {
       }
     }.toTypedArray()
 
-    MaterialAlertDialogBuilder(this, R.style.ThemeOverlay_Xemu_RoundedDialog)
-      .setTitle(game.title)
-      .setItems(options) { _, which ->
-        when (actions[which]) {
-          GameContextAction.SET_CUSTOM_COVER -> {
-            pendingCustomCoverGame = game
-            pickCustomCover.launch("image/*")
+    val dp = resources.displayMetrics.density
+    lateinit var contextDialog: androidx.appcompat.app.AlertDialog
+
+    val buttonList = LinearLayout(this).apply {
+      orientation = LinearLayout.VERTICAL
+      setPadding((20 * dp).toInt(), (12 * dp).toInt(), (20 * dp).toInt(), 0)
+      options.forEachIndexed { i, label ->
+        addView(MaterialButton(this@GameLibraryActivity, null,
+          com.google.android.material.R.attr.materialButtonOutlinedStyle).apply {
+          text = label
+          layoutParams = LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+          ).also { lp -> lp.bottomMargin = (8 * dp).toInt() }
+          setOnClickListener {
+            contextDialog.dismiss()
+            when (actions[i]) {
+              GameContextAction.SET_CUSTOM_COVER -> {
+                pendingCustomCoverGame = game
+                pickCustomCover.launch("image/*")
+              }
+              GameContextAction.REMOVE_CUSTOM_COVER -> removeCustomCover(game)
+              GameContextAction.DELETE_GAME -> confirmDeleteGame(game)
+            }
           }
-          GameContextAction.REMOVE_CUSTOM_COVER -> removeCustomCover(game)
-          GameContextAction.DELETE_GAME -> confirmDeleteGame(game)
-        }
+        })
       }
+    }
+
+    contextDialog = MaterialAlertDialogBuilder(this, R.style.ThemeOverlay_Xemu_RoundedDialog)
+      .setTitle(game.title)
+      .setView(buttonList)
       .setNegativeButton(android.R.string.cancel, null)
-      .show()
+      .create()
+    contextDialog.show()
   }
 
   private fun openExternalLink(url: String) {

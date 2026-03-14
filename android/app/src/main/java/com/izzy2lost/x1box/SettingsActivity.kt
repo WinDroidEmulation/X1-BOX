@@ -8,6 +8,7 @@ import android.provider.OpenableColumns
 import android.text.format.Formatter
 import android.widget.ArrayAdapter
 import android.widget.AutoCompleteTextView
+import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
@@ -640,23 +641,45 @@ class SettingsActivity : AppCompatActivity() {
         }
       }
       .toTypedArray()
-    MaterialAlertDialogBuilder(this, R.style.ThemeOverlay_Xemu_RoundedDialog)
-      .setTitle(R.string.settings_hdd_layout_pick_title)
-      .setItems(labels) { _, which ->
-        val layout = allLayouts[which]
-        val availability = XboxHddFormatter.availabilityFor(inspection, layout)
-        if (availability == XboxHddFormatter.LayoutAvailability.AVAILABLE) {
-          showInitializeHddConfirmation(hddFile, layout, button)
-        } else {
-          MaterialAlertDialogBuilder(this, R.style.ThemeOverlay_Xemu_RoundedDialog)
-            .setTitle(R.string.settings_hdd_layout_unavailable_title)
-            .setMessage(getString(hddLayoutUnavailableReasonRes(availability)))
-            .setPositiveButton(android.R.string.ok, null)
-            .show()
-        }
+    val dp = resources.displayMetrics.density
+    lateinit var hddDialog: androidx.appcompat.app.AlertDialog
+
+    val buttonList = LinearLayout(this).apply {
+      orientation = LinearLayout.VERTICAL
+      setPadding((20 * dp).toInt(), (12 * dp).toInt(), (20 * dp).toInt(), 0)
+      labels.forEachIndexed { i, label ->
+        addView(MaterialButton(this@SettingsActivity, null,
+          com.google.android.material.R.attr.materialButtonOutlinedStyle).apply {
+          text = label
+          isAllCaps = false
+          layoutParams = LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+          ).also { lp -> lp.bottomMargin = (8 * dp).toInt() }
+          setOnClickListener {
+            hddDialog.dismiss()
+            val layout = allLayouts[i]
+            val availability = XboxHddFormatter.availabilityFor(inspection, layout)
+            if (availability == XboxHddFormatter.LayoutAvailability.AVAILABLE) {
+              showInitializeHddConfirmation(hddFile, layout, button)
+            } else {
+              MaterialAlertDialogBuilder(this@SettingsActivity, R.style.ThemeOverlay_Xemu_RoundedDialog)
+                .setTitle(R.string.settings_hdd_layout_unavailable_title)
+                .setMessage(getString(hddLayoutUnavailableReasonRes(availability)))
+                .setPositiveButton(android.R.string.ok, null)
+                .show()
+            }
+          }
+        })
       }
+    }
+
+    hddDialog = MaterialAlertDialogBuilder(this, R.style.ThemeOverlay_Xemu_RoundedDialog)
+      .setTitle(R.string.settings_hdd_layout_pick_title)
+      .setView(buttonList)
       .setNegativeButton(android.R.string.cancel, null)
-      .show()
+      .create()
+    hddDialog.show()
   }
 
   private fun showInitializeHddConfirmation(
@@ -783,16 +806,37 @@ class SettingsActivity : AppCompatActivity() {
       getString(R.string.settings_dashboard_import_source_zip),
       getString(R.string.settings_dashboard_import_source_folder),
     )
-    MaterialAlertDialogBuilder(this, R.style.ThemeOverlay_Xemu_RoundedDialog)
-      .setTitle(R.string.settings_dashboard_import_source_title)
-      .setItems(labels) { _, which ->
-        when (which) {
-          0 -> pickDashboardZip.launch(arrayOf("application/zip", "application/octet-stream"))
-          else -> pickDashboardFolder.launch(null)
-        }
+    val dp = resources.displayMetrics.density
+    lateinit var importDialog: androidx.appcompat.app.AlertDialog
+
+    val buttonList = LinearLayout(this).apply {
+      orientation = LinearLayout.VERTICAL
+      setPadding((20 * dp).toInt(), (12 * dp).toInt(), (20 * dp).toInt(), 0)
+      labels.forEachIndexed { i, label ->
+        addView(MaterialButton(this@SettingsActivity, null,
+          com.google.android.material.R.attr.materialButtonOutlinedStyle).apply {
+          text = label
+          layoutParams = LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+          ).also { lp -> lp.bottomMargin = (8 * dp).toInt() }
+          setOnClickListener {
+            importDialog.dismiss()
+            when (i) {
+              0 -> pickDashboardZip.launch(arrayOf("application/zip", "application/octet-stream"))
+              else -> pickDashboardFolder.launch(null)
+            }
+          }
+        })
       }
+    }
+
+    importDialog = MaterialAlertDialogBuilder(this, R.style.ThemeOverlay_Xemu_RoundedDialog)
+      .setTitle(R.string.settings_dashboard_import_source_title)
+      .setView(buttonList)
       .setNegativeButton(android.R.string.cancel, null)
-      .show()
+      .create()
+    importDialog.show()
   }
 
   private fun prepareDashboardImportFromZip(uri: Uri) {

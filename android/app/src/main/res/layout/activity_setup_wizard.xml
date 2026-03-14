@@ -12,7 +12,8 @@
     android:layout_height="0dp"
     android:clipToPadding="false"
     android:fillViewport="true"
-    android:padding="24dp"
+    android:paddingHorizontal="@dimen/top_level_card_outer_padding_horizontal"
+    android:paddingVertical="@dimen/top_level_card_outer_padding_vertical"
     app:layout_constraintBottom_toBottomOf="parent"
     app:layout_constraintEnd_toEndOf="parent"
     app:layout_constraintStart_toStartOf="parent"
@@ -30,10 +31,9 @@
         android:layout_height="wrap_content"
         app:cardBackgroundColor="@color/xemu_surface"
         app:cardCornerRadius="28dp"
-        app:cardElevation="8dp"
-        app:cardUseCompatPadding="true"
-        app:strokeColor="@color/xemu_outline_variant"
-        app:strokeWidth="1dp">
+        app:cardElevation="14dp"
+        app:strokeColor="@color/xemu_outline"
+        app:strokeWidth="2dp">
 
         <LinearLayout
           android:layout_width="match_parent"
@@ -76,7 +76,7 @@
                 android:layout_height="40dp"
                 android:layout_gravity="center_horizontal"
                 android:contentDescription="@string/setup_mcpx_title"
-                android:src="@android:drawable/ic_menu_upload"
+                android:src="@drawable/ic_xemu_upload_file"
                 android:tint="@color/xemu_green" />
 
               <TextView
@@ -102,7 +102,7 @@
                 android:layout_height="wrap_content"
                 android:layout_marginTop="16dp"
                 android:text="@string/setup_pick_mcpx"
-                app:icon="@android:drawable/ic_menu_upload"
+                app:icon="@drawable/ic_xemu_upload_file"
                 app:iconGravity="textStart"
                 app:iconPadding="8dp" />
 
@@ -131,7 +131,7 @@
                 android:layout_height="40dp"
                 android:layout_gravity="center_horizontal"
                 android:contentDescription="@string/setup_flash_title"
-                android:src="@android:drawable/ic_menu_manage"
+                android:src="@drawable/ic_xemu_memory"
                 android:tint="@color/xemu_green" />
 
               <TextView
@@ -157,7 +157,7 @@
                 android:layout_height="wrap_content"
                 android:layout_marginTop="16dp"
                 android:text="@string/setup_pick_flash"
-                app:icon="@android:drawable/ic_menu_manage"
+                app:icon="@drawable/ic_xemu_memory"
                 app:iconGravity="textStart"
                 app:iconPadding="8dp" />
 
@@ -186,7 +186,7 @@
                 android:layout_height="40dp"
                 android:layout_gravity="center_horizontal"
                 android:contentDescription="@string/setup_hdd_title"
-                android:src="@android:drawable/ic_menu_save"
+                android:src="@drawable/ic_xemu_hard_drive"
                 android:tint="@color/xemu_green" />
 
               <TextView
@@ -212,7 +212,7 @@
                 android:layout_height="wrap_content"
                 android:layout_marginTop="16dp"
                 android:text="@string/setup_pick_hdd"
-                app:icon="@android:drawable/ic_menu_save"
+                app:icon="@drawable/ic_xemu_hard_drive"
                 app:iconGravity="textStart"
                 app:iconPadding="8dp" />
 
@@ -241,7 +241,7 @@
                 android:layout_height="40dp"
                 android:layout_gravity="center_horizontal"
                 android:contentDescription="@string/setup_disc_title"
-                android:src="@android:drawable/ic_menu_agenda"
+                android:src="@drawable/ic_xemu_disc"
                 android:tint="@color/xemu_green" />
 
               <TextView
@@ -267,7 +267,7 @@
                 android:layout_height="wrap_content"
                 android:layout_marginTop="16dp"
                 android:text="@string/setup_pick_disc"
-                app:icon="@android:drawable/ic_menu_agenda"
+                app:icon="@drawable/ic_xemu_disc"
                 app:iconGravity="textStart"
                 app:iconPadding="8dp" />
 
@@ -335,7 +335,7 @@
 
             <com.google.android.material.button.MaterialButton
               android:id="@+id/btn_wizard_back"
-              style="?attr/materialButtonOutlinedStyle"
+              style="@style/Widget.Xemu.Button.Outlined.Pill"
               android:layout_width="0dp"
               android:layout_height="wrap_content"
               android:layout_weight="1"

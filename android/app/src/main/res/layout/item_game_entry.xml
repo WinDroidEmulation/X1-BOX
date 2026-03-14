@@ -3,34 +3,45 @@
   xmlns:app="http://schemas.android.com/apk/res-auto"
   android:layout_width="match_parent"
   android:layout_height="wrap_content"
-  android:layout_marginTop="12dp"
+  android:layout_marginTop="6dp"
   android:clickable="true"
   android:focusable="true"
-  app:cardBackgroundColor="@color/xemu_surface_variant"
+  app:cardBackgroundColor="@android:color/transparent"
   app:cardCornerRadius="22dp"
   app:cardElevation="0dp"
   app:rippleColor="@color/xemu_green"
-  app:strokeColor="@color/xemu_outline"
-  app:strokeWidth="1dp">
+  app:strokeWidth="0dp">
 
   <LinearLayout
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
     android:gravity="center_vertical"
     android:orientation="horizontal"
-    android:padding="16dp">
+    android:paddingHorizontal="12dp"
+    android:paddingVertical="10dp">
 
-    <ImageView
-      android:layout_width="40dp"
-      android:layout_height="40dp"
-      android:contentDescription="@string/library_open_game"
-      android:src="@android:drawable/ic_menu_slideshow"
-      android:tint="@color/xemu_green" />
+    <com.google.android.material.card.MaterialCardView
+      android:layout_width="72dp"
+      android:layout_height="108dp"
+      app:cardBackgroundColor="@android:color/transparent"
+      app:cardCornerRadius="6dp"
+      app:cardElevation="10dp"
+      app:strokeWidth="0dp">
+
+      <ImageView
+        android:id="@+id/game_list_cover_image"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="@drawable/game_list_cover_background"
+        android:contentDescription="@string/library_open_game"
+        android:scaleType="fitCenter"
+        android:src="@drawable/ic_xemu_image_placeholder" />
+    </com.google.android.material.card.MaterialCardView>
 
     <LinearLayout
       android:layout_width="0dp"
       android:layout_height="wrap_content"
-      android:layout_marginStart="12dp"
+      android:layout_marginStart="16dp"
       android:layout_weight="1"
       android:orientation="vertical">
 
@@ -39,17 +50,17 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:ellipsize="end"
-        android:maxLines="1"
-        android:textAppearance="@style/TextAppearance.Material3.TitleMedium" />
+        android:maxLines="2"
+        android:textAppearance="@style/TextAppearance.Material3.TitleSmall" />
 
       <TextView
         android:id="@+id/game_size_text"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="2dp"
+        android:layout_marginTop="4dp"
         android:ellipsize="end"
-        android:maxLines="2"
-        android:textAppearance="@style/TextAppearance.Material3.BodySmall"
+        android:maxLines="1"
+        android:textAppearance="@style/TextAppearance.Material3.LabelSmall"
         android:textColor="@color/xemu_text_muted" />
 
       <TextView
@@ -62,12 +73,5 @@
         android:textAppearance="@style/TextAppearance.Material3.BodySmall"
         android:textColor="@color/xemu_text_muted" />
     </LinearLayout>
-
-    <ImageView
-      android:layout_width="24dp"
-      android:layout_height="24dp"
-      android:contentDescription="@string/library_open_game"
-      android:src="@android:drawable/ic_media_play"
-      android:tint="@color/xemu_green" />
   </LinearLayout>
 </com.google.android.material.card.MaterialCardView>

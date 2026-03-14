@@ -1,59 +1,49 @@
 <?xml version="1.0" encoding="utf-8"?>
-<com.google.android.material.card.MaterialCardView xmlns:android="http://schemas.android.com/apk/res/android"
+<androidx.constraintlayout.widget.ConstraintLayout xmlns:android="http://schemas.android.com/apk/res/android"
   xmlns:app="http://schemas.android.com/apk/res-auto"
   android:layout_width="match_parent"
   android:layout_height="wrap_content"
   android:clickable="true"
+  android:clipChildren="false"
+  android:clipToPadding="false"
   android:focusable="true"
-  app:cardBackgroundColor="@color/xemu_surface_variant"
-  app:cardCornerRadius="20dp"
-  app:cardElevation="0dp"
-  app:rippleColor="@color/xemu_green"
-  app:strokeColor="@color/xemu_outline"
-  app:strokeWidth="1dp">
+  android:padding="6dp">
 
-  <androidx.constraintlayout.widget.ConstraintLayout
-    android:layout_width="match_parent"
-    android:layout_height="wrap_content"
-    android:padding="10dp">
+  <com.google.android.material.card.MaterialCardView
+    android:id="@+id/game_cover_art_card"
+    android:layout_width="0dp"
+    android:layout_height="0dp"
+    app:cardBackgroundColor="@android:color/transparent"
+    app:cardCornerRadius="18dp"
+    app:cardElevation="14dp"
+    app:layout_constraintDimensionRatio="2:3"
+    app:layout_constraintEnd_toEndOf="parent"
+    app:layout_constraintStart_toStartOf="parent"
+    app:layout_constraintTop_toTopOf="parent"
+    app:strokeWidth="0dp">
 
     <ImageView
       android:id="@+id/game_cover_image"
-      android:layout_width="0dp"
-      android:layout_height="0dp"
-      android:background="@drawable/setup_wizard_path_background"
+      android:layout_width="match_parent"
+      android:layout_height="match_parent"
+      android:background="@drawable/game_cover_image_background"
       android:contentDescription="@string/library_open_game"
       android:scaleType="fitCenter"
-      android:src="@android:drawable/ic_menu_report_image"
-      app:layout_constraintDimensionRatio="2:3"
-      app:layout_constraintEnd_toEndOf="parent"
-      app:layout_constraintStart_toStartOf="parent"
-      app:layout_constraintTop_toTopOf="parent" />
+      android:src="@drawable/ic_xemu_image_placeholder" />
+  </com.google.android.material.card.MaterialCardView>
 
-    <TextView
-      android:id="@+id/game_cover_name_text"
-      android:layout_width="0dp"
-      android:layout_height="wrap_content"
-      android:layout_marginTop="8dp"
-      android:ellipsize="end"
-      android:maxLines="2"
-      android:textAppearance="@style/TextAppearance.Material3.TitleSmall"
-      app:layout_constraintEnd_toEndOf="parent"
-      app:layout_constraintStart_toStartOf="parent"
-      app:layout_constraintTop_toBottomOf="@id/game_cover_image" />
-
-    <TextView
-      android:id="@+id/game_cover_size_text"
-      android:layout_width="0dp"
-      android:layout_height="wrap_content"
-      android:layout_marginTop="2dp"
-      android:ellipsize="end"
-      android:maxLines="2"
-      android:textAppearance="@style/TextAppearance.Material3.BodySmall"
-      android:textColor="@color/xemu_text_muted"
-      app:layout_constraintBottom_toBottomOf="parent"
-      app:layout_constraintEnd_toEndOf="parent"
-      app:layout_constraintStart_toStartOf="parent"
-      app:layout_constraintTop_toBottomOf="@id/game_cover_name_text" />
-  </androidx.constraintlayout.widget.ConstraintLayout>
-</com.google.android.material.card.MaterialCardView>
+  <TextView
+    android:id="@+id/game_cover_name_text"
+    android:layout_width="0dp"
+    android:layout_height="wrap_content"
+    android:layout_marginTop="14dp"
+    android:ellipsize="end"
+    android:gravity="center_horizontal"
+    android:maxLines="2"
+    android:textAlignment="center"
+    android:textAppearance="@style/TextAppearance.Material3.TitleSmall"
+    app:layout_constraintBottom_toBottomOf="parent"
+    app:layout_constraintEnd_toEndOf="parent"
+    app:layout_constraintStart_toStartOf="parent"
+    app:layout_constraintTop_toBottomOf="@id/game_cover_art_card" />
+</androidx.constraintlayout.widget.ConstraintLayout>

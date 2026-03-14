@@ -11,7 +11,8 @@
     android:layout_height="0dp"
     android:clipToPadding="false"
     android:fillViewport="true"
-    android:padding="24dp"
+    android:paddingHorizontal="@dimen/top_level_card_outer_padding_horizontal"
+    android:paddingVertical="@dimen/top_level_card_outer_padding_vertical"
     app:layout_constraintBottom_toBottomOf="parent"
     app:layout_constraintEnd_toEndOf="parent"
     app:layout_constraintStart_toStartOf="parent"
@@ -28,9 +29,9 @@
         android:layout_height="wrap_content"
         app:cardBackgroundColor="@color/xemu_surface"
         app:cardCornerRadius="28dp"
-        app:cardElevation="8dp"
-        app:strokeColor="@color/xemu_outline_variant"
-        app:strokeWidth="1dp">
+        app:cardElevation="14dp"
+        app:strokeColor="@color/xemu_outline"
+        app:strokeWidth="2dp">
 
         <LinearLayout
           android:layout_width="match_parent"
@@ -48,12 +49,13 @@
 
           <!-- ── DISPLAY ── -->
           <TextView
-            android:layout_width="match_parent"
+            android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_marginBottom="8dp"
+            android:layout_marginBottom="12dp"
+            android:background="@drawable/section_header_background"
             android:text="@string/settings_section_display"
             android:textAppearance="@style/TextAppearance.Material3.LabelLarge"
-            android:textColor="@color/xemu_green" />
+            android:textColor="@color/xemu_green_light" />
 
           <TextView
             android:layout_width="match_parent"
@@ -293,14 +295,21 @@
             android:textColor="@color/xemu_text_muted" />
 
           <!-- ── VULKAN DRIVER ── -->
-          <TextView
+          <View
             android:layout_width="match_parent"
-            android:layout_height="wrap_content"
+            android:layout_height="1dp"
             android:layout_marginTop="8dp"
-            android:layout_marginBottom="8dp"
+            android:layout_marginBottom="16dp"
+            android:background="@color/xemu_outline_variant" />
+
+          <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="12dp"
+            android:background="@drawable/section_header_background"
             android:text="@string/settings_section_vulkan_driver"
             android:textAppearance="@style/TextAppearance.Material3.LabelLarge"
-            android:textColor="@color/xemu_green" />
+            android:textColor="@color/xemu_green_light" />
 
           <TextView
             android:id="@+id/tv_vulkan_driver_name"
@@ -346,14 +355,21 @@
             android:textColor="@color/xemu_text_muted" />
 
           <!-- ── PERFORMANCE ── -->
-          <TextView
+          <View
             android:layout_width="match_parent"
-            android:layout_height="wrap_content"
+            android:layout_height="1dp"
             android:layout_marginTop="8dp"
-            android:layout_marginBottom="8dp"
+            android:layout_marginBottom="16dp"
+            android:background="@color/xemu_outline_variant" />
+
+          <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="12dp"
+            android:background="@drawable/section_header_background"
             android:text="@string/settings_section_performance"
             android:textAppearance="@style/TextAppearance.Material3.LabelLarge"
-            android:textColor="@color/xemu_green" />
+            android:textColor="@color/xemu_green_light" />
 
           <TextView
             android:layout_width="match_parent"
@@ -414,14 +430,21 @@
             android:textColor="@color/xemu_text_muted" />
 
           <!-- ── AUDIO ── -->
-          <TextView
+          <View
             android:layout_width="match_parent"
-            android:layout_height="wrap_content"
+            android:layout_height="1dp"
             android:layout_marginTop="16dp"
-            android:layout_marginBottom="8dp"
+            android:layout_marginBottom="16dp"
+            android:background="@color/xemu_outline_variant" />
+
+          <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="12dp"
+            android:background="@drawable/section_header_background"
             android:text="@string/settings_section_audio"
             android:textAppearance="@style/TextAppearance.Material3.LabelLarge"
-            android:textColor="@color/xemu_green" />
+            android:textColor="@color/xemu_green_light" />
 
           <com.google.android.material.materialswitch.MaterialSwitch
             android:id="@+id/switch_use_dsp"
@@ -481,14 +504,21 @@
 
           </com.google.android.material.button.MaterialButtonToggleGroup>
 
-          <TextView
+          <View
             android:layout_width="match_parent"
-            android:layout_height="wrap_content"
+            android:layout_height="1dp"
             android:layout_marginTop="16dp"
-            android:layout_marginBottom="8dp"
+            android:layout_marginBottom="16dp"
+            android:background="@color/xemu_outline_variant" />
+
+          <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="12dp"
+            android:background="@drawable/section_header_background"
             android:text="@string/settings_section_eeprom"
             android:textAppearance="@style/TextAppearance.Material3.LabelLarge"
-            android:textColor="@color/xemu_green" />
+            android:textColor="@color/xemu_green_light" />
 
           <TextView
             android:id="@+id/tv_eeprom_status"
@@ -599,14 +629,21 @@
             android:textAppearance="@style/TextAppearance.Material3.BodySmall"
             android:textColor="@color/xemu_text_muted" />
 
-          <TextView
+          <View
             android:layout_width="match_parent"
-            android:layout_height="wrap_content"
+            android:layout_height="1dp"
             android:layout_marginTop="16dp"
+            android:layout_marginBottom="16dp"
+            android:background="@color/xemu_outline_variant" />
+
+          <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
             android:layout_marginBottom="8dp"
+            android:background="@drawable/section_header_background"
             android:text="@string/settings_section_hdd_tools"
             android:textAppearance="@style/TextAppearance.Material3.LabelLarge"
-            android:textColor="@color/xemu_green" />
+            android:textColor="@color/xemu_green_light" />
 
           <TextView
             android:id="@+id/tv_hdd_tools_status"
@@ -624,9 +661,9 @@
             android:textAppearance="@style/TextAppearance.Material3.BodySmall"
             android:textColor="@color/xemu_text_muted" />
 
-          <com.google.android.material.button.MaterialButton
-            android:id="@+id/btn_initialize_retail_hdd"
-            style="?attr/materialButtonOutlinedStyle"
+            <com.google.android.material.button.MaterialButton
+              android:id="@+id/btn_initialize_retail_hdd"
+            style="@style/Widget.Xemu.Button.Outlined.Pill"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginBottom="6dp"
@@ -634,23 +671,30 @@
 
           <com.google.android.material.button.MaterialButton
             android:id="@+id/btn_import_dashboard"
-            style="?attr/materialButtonOutlinedStyle"
+            style="@style/Widget.Xemu.Button.Outlined.Pill"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:text="@string/settings_dashboard_import_action" />
 
-          <TextView
+          <View
             android:layout_width="match_parent"
-            android:layout_height="wrap_content"
+            android:layout_height="1dp"
             android:layout_marginTop="16dp"
+            android:layout_marginBottom="16dp"
+            android:background="@color/xemu_outline_variant" />
+
+          <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
             android:layout_marginBottom="8dp"
+            android:background="@drawable/section_header_background"
             android:text="@string/settings_section_maintenance"
             android:textAppearance="@style/TextAppearance.Material3.LabelLarge"
-            android:textColor="@color/xemu_green" />
+            android:textColor="@color/xemu_green_light" />
 
           <com.google.android.material.button.MaterialButton
             android:id="@+id/btn_clear_system_cache"
-            style="?attr/materialButtonOutlinedStyle"
+            style="@style/Widget.Xemu.Button.Outlined.Pill"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:text="@string/settings_clear_cache_action" />
@@ -665,7 +709,7 @@
 
           <com.google.android.material.button.MaterialButton
             android:id="@+id/btn_redo_setup_wizard"
-            style="?attr/materialButtonOutlinedStyle"
+            style="@style/Widget.Xemu.Button.Outlined.Pill"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="8dp"

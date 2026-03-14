@@ -1,29 +1,196 @@
 <resources>
+
+  <!-- ── Main App Theme ── -->
   <style name="Theme.Xemu" parent="Theme.Material3.Dark.NoActionBar">
+
+    <!-- Primary: Xbox green -->
     <item name="colorPrimary">@color/xemu_green</item>
     <item name="colorOnPrimary">@color/xemu_black</item>
-    <item name="colorPrimaryContainer">@color/xemu_green_dark</item>
-    <item name="colorOnPrimaryContainer">@color/xemu_text</item>
+    <item name="colorPrimaryContainer">@color/xemu_green_container</item>
+    <item name="colorOnPrimaryContainer">@color/xemu_green_light</item>
 
-    <item name="colorSecondary">@color/xemu_green</item>
+    <!-- Secondary: slightly muted green for toggles / chips -->
+    <item name="colorSecondary">@color/xemu_green_light</item>
     <item name="colorOnSecondary">@color/xemu_black</item>
+    <item name="colorSecondaryContainer">@color/xemu_green_dark</item>
+    <item name="colorOnSecondaryContainer">@color/xemu_black</item>
 
+    <!-- Tertiary: same family, warm complement -->
+    <item name="colorTertiary">@color/xemu_green_light</item>
+    <item name="colorOnTertiary">@color/xemu_black</item>
+    <item name="colorTertiaryContainer">@color/xemu_surface_container_high</item>
+    <item name="colorOnTertiaryContainer">@color/xemu_text</item>
+
+    <!-- Surfaces -->
     <item name="android:colorBackground">@color/xemu_black</item>
     <item name="colorSurface">@color/xemu_surface</item>
     <item name="colorOnSurface">@color/xemu_text</item>
     <item name="colorSurfaceVariant">@color/xemu_surface_variant</item>
     <item name="colorOnSurfaceVariant">@color/xemu_text_muted</item>
+    <item name="colorSurfaceContainer">@color/xemu_surface_container</item>
+    <item name="colorSurfaceContainerHigh">@color/xemu_surface_container_high</item>
 
+    <!-- Borders -->
     <item name="colorOutline">@color/xemu_outline</item>
     <item name="colorOutlineVariant">@color/xemu_outline_variant</item>
+
+    <!-- Error -->
+    <item name="colorError">@color/xemu_warning</item>
+    <item name="colorErrorContainer">@color/xemu_warning_container</item>
+
+    <!--
+      Shape scale:
+      Outlined controls default to medium rounding so segmented toggle groups
+      render cleanly. Filled CTAs and explicitly styled action buttons opt into
+      the pill shape where it makes sense.
+    -->
+    <item name="shapeAppearanceSmallComponent">@style/ShapeAppearance.Xemu.Pill</item>
+    <item name="shapeAppearanceMediumComponent">@style/ShapeAppearance.Xemu.Medium</item>
+    <item name="shapeAppearanceLargeComponent">@style/ShapeAppearance.Xemu.Large</item>
+
+    <!-- Card default style -->
+    <item name="materialCardViewStyle">@style/Widget.Xemu.CardView</item>
+
+    <!-- Button styles -->
+    <item name="materialButtonStyle">@style/Widget.Xemu.Button</item>
+    <item name="materialButtonOutlinedStyle">@style/Widget.Xemu.Button.Outlined</item>
+    <item name="materialButtonToggleGroupStyle">@style/Widget.Xemu.ButtonToggleGroup</item>
   </style>
 
-  <style name="ThemeOverlay.Xemu.RoundedDialog" parent="ThemeOverlay.Material3.MaterialAlertDialog">
-    <item name="shapeAppearanceOverlay">@style/ShapeAppearanceOverlay.Xemu.RoundedDialog</item>
+  <!-- ── Shape Scales ── -->
+
+  <!--
+    M3 Expressive "Pill" shape.
+    Using 100dp (instead of 50%) avoids RelativeCornerSize edge cases
+    with ripple clipping in toggle groups. Material's shape system clamps
+    this to half the view height anyway, so visually identical to 50%.
+  -->
+  <style name="ShapeAppearance.Xemu.Pill" parent="">
+    <item name="cornerFamily">rounded</item>
+    <item name="cornerSize">100dp</item>
   </style>
 
-  <style name="ShapeAppearanceOverlay.Xemu.RoundedDialog" parent="">
+  <style name="ShapeAppearance.Xemu.Medium" parent="ShapeAppearance.Material3.MediumComponent">
+    <item name="cornerFamily">rounded</item>
+    <item name="cornerSize">16dp</item>
+  </style>
+
+  <style name="ShapeAppearance.Xemu.Large" parent="ShapeAppearance.Material3.LargeComponent">
     <item name="cornerFamily">rounded</item>
     <item name="cornerSize">24dp</item>
   </style>
+
+  <!-- ── Card ── -->
+  <style name="Widget.Xemu.CardView" parent="Widget.Material3.CardView.Filled">
+    <item name="cardBackgroundColor">@color/xemu_surface</item>
+    <item name="cardCornerRadius">28dp</item>
+    <item name="cardElevation">12dp</item>
+    <item name="strokeColor">@color/xemu_outline</item>
+    <item name="strokeWidth">2dp</item>
+  </style>
+
+  <!-- ── Filled Button (M3 Expressive pill + spring press) ── -->
+  <style name="Widget.Xemu.Button" parent="Widget.Material3.Button">
+    <item name="android:minHeight">52dp</item>
+    <item name="android:paddingStart">24dp</item>
+    <item name="android:paddingEnd">24dp</item>
+    <item name="backgroundTint">@color/xemu_button_filled_background</item>
+    <item name="android:textColor">@color/xemu_button_content_filled</item>
+    <item name="iconTint">@color/xemu_button_content_filled</item>
+    <item name="iconSize">26dp</item>
+    <item name="rippleColor">@color/xemu_green_light</item>
+    <item name="shapeAppearance">@style/ShapeAppearance.Xemu.Pill</item>
+    <item name="android:stateListAnimator">@animator/button_press_spring</item>
+  </style>
+
+  <!--
+    Outlined Button — moderate rounding by default so toggle-group children
+    don't produce pinched "bowtie" geometry when Material zeroes the inner
+    corners. Standalone action buttons can opt into the pill variant below.
+  -->
+  <style name="Widget.Xemu.Button.Outlined" parent="Widget.Material3.Button.OutlinedButton">
+    <item name="android:minHeight">52dp</item>
+    <item name="android:paddingStart">24dp</item>
+    <item name="android:paddingEnd">24dp</item>
+    <item name="android:textColor">@color/xemu_button_content</item>
+    <item name="iconTint">@color/xemu_button_content</item>
+    <item name="iconSize">26dp</item>
+    <item name="shapeAppearance">@style/ShapeAppearance.Xemu.Medium</item>
+    <item name="strokeColor">@color/xemu_green_dark</item>
+    <item name="strokeWidth">1.5dp</item>
+    <item name="rippleColor">@color/xemu_green</item>
+  </style>
+
+  <style name="Widget.Xemu.Button.Outlined.Pill" parent="Widget.Xemu.Button.Outlined">
+    <item name="shapeAppearance">@style/ShapeAppearance.Xemu.Pill</item>
+    <item name="android:stateListAnimator">@animator/button_press_spring</item>
+  </style>
+
+  <!--
+    Toggle Group — segmented controls inherit the medium outlined shape above.
+    Material rounds the outer edges for us, and the 16dp base keeps the center
+    seams from collapsing into fish/bowtie shapes.
+  -->
+  <style name="Widget.Xemu.ButtonToggleGroup" parent="Widget.Material3.MaterialButtonToggleGroup">
+    <item name="android:minHeight">52dp</item>
+  </style>
+
+  <!-- ── Dialog Theme Overlay ── -->
+  <style name="ThemeOverlay.Xemu.RoundedDialog" parent="ThemeOverlay.Material3.MaterialAlertDialog">
+    <item name="shapeAppearanceOverlay">@style/ShapeAppearanceOverlay.Xemu.Dialog</item>
+    <item name="colorSurface">@color/xemu_surface_container</item>
+    <item name="colorOnSurface">@color/xemu_text</item>
+    <item name="colorOnSurfaceVariant">@color/xemu_text_muted</item>
+    <!-- Keep colorPrimary so filled button inherits green correctly -->
+    <item name="colorPrimary">@color/xemu_green</item>
+    <item name="colorOnPrimary">@color/xemu_black</item>
+
+    <!-- Material-namespaced attrs (used by MaterialAlertDialogBuilder) -->
+    <item name="buttonBarPositiveButtonStyle">@style/Widget.Xemu.Dialog.Button.Positive</item>
+    <item name="buttonBarNegativeButtonStyle">@style/Widget.Xemu.Dialog.Button.Negative</item>
+    <item name="buttonBarNeutralButtonStyle">@style/Widget.Xemu.Dialog.Button.Neutral</item>
+    <!-- Android-namespaced fallback (used by the underlying AlertDialog layout) -->
+    <item name="android:buttonBarPositiveButtonStyle">@style/Widget.Xemu.Dialog.Button.Positive</item>
+    <item name="android:buttonBarNegativeButtonStyle">@style/Widget.Xemu.Dialog.Button.Negative</item>
+    <item name="android:buttonBarNeutralButtonStyle">@style/Widget.Xemu.Dialog.Button.Neutral</item>
+  </style>
+
+  <style name="ShapeAppearanceOverlay.Xemu.Dialog" parent="">
+    <item name="cornerFamily">rounded</item>
+    <item name="cornerSize">28dp</item>
+  </style>
+
+  <!--
+    Dialog: positive = filled green pill button with spring press.
+  -->
+  <style name="Widget.Xemu.Dialog.Button.Positive" parent="Widget.Material3.Button">
+    <item name="backgroundTint">@color/xemu_button_filled_background</item>
+    <item name="android:textColor">@color/xemu_button_content_filled</item>
+    <item name="rippleColor">@color/xemu_green_light</item>
+    <item name="shapeAppearance">@style/ShapeAppearance.Xemu.Pill</item>
+    <item name="android:minWidth">88dp</item>
+    <item name="android:minHeight">44dp</item>
+    <item name="android:stateListAnimator">@animator/button_press_spring</item>
+  </style>
+
+  <!--
+    Dialog: negative = outlined pill button.
+  -->
+  <style name="Widget.Xemu.Dialog.Button.Negative" parent="Widget.Material3.Button.OutlinedButton">
+    <item name="strokeColor">@color/xemu_outline</item>
+    <item name="strokeWidth">1.5dp</item>
+    <item name="android:textColor">@color/xemu_button_content</item>
+    <item name="shapeAppearance">@style/ShapeAppearance.Xemu.Pill</item>
+    <item name="android:minWidth">88dp</item>
+    <item name="android:minHeight">44dp</item>
+    <item name="android:stateListAnimator">@animator/button_press_spring</item>
+  </style>
+
+  <!-- Dialog: neutral = text button -->
+  <style name="Widget.Xemu.Dialog.Button.Neutral" parent="Widget.Material3.Button.TextButton">
+    <item name="android:textColor">@color/xemu_button_content</item>
+    <item name="android:minWidth">88dp</item>
+    <item name="android:minHeight">44dp</item>
+  </style>
+
 </resources>

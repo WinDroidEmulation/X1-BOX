@@ -1,12 +1,27 @@
-<shape xmlns:android="http://schemas.android.com/apk/res/android">
-  <solid android:color="@color/xemu_surface_variant" />
-  <stroke
-    android:width="1dp"
-    android:color="@color/xemu_outline" />
-  <corners android:radius="14dp" />
-  <padding
-    android:left="12dp"
-    android:right="12dp"
-    android:top="10dp"
-    android:bottom="10dp" />
-</shape>
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+  <item>
+    <shape>
+      <solid android:color="@color/xemu_outline_shadow" />
+      <corners android:radius="16dp" />
+    </shape>
+  </item>
+
+  <item
+    android:bottom="2dp"
+    android:left="1dp"
+    android:right="1dp"
+    android:top="1dp">
+    <shape>
+      <solid android:color="@color/xemu_surface_container" />
+      <stroke
+        android:width="2dp"
+        android:color="@color/xemu_outline" />
+      <corners android:radius="15dp" />
+      <padding
+        android:left="14dp"
+        android:right="14dp"
+        android:top="12dp"
+        android:bottom="12dp" />
+    </shape>
+  </item>
+</layer-list>

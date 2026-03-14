@@ -21,10 +21,13 @@ import android.view.ViewConfiguration
 import android.widget.BaseAdapter
 import android.widget.FrameLayout
 import android.widget.ImageView
+import android.widget.LinearLayout
 import android.widget.ListView
 import android.widget.RelativeLayout
 import android.widget.TextView
 import android.widget.Toast
+import androidx.core.widget.NestedScrollView
+import com.google.android.material.button.MaterialButton
 import androidx.appcompat.app.AlertDialog
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import org.libsdl.app.SDLActivity
@@ -663,7 +666,7 @@ class MainActivity : SDLActivity(), InputManager.InputDeviceListener {
             showSnapshotPreviewDialog(preview)
           }
         } else {
-          thumbnail.setImageResource(android.R.drawable.ic_menu_report_image)
+          thumbnail.setImageResource(R.drawable.ic_xemu_image_placeholder)
           previewHint.text = getString(R.string.snapshot_preview_unavailable)
           previewHint.visibility = View.VISIBLE
           thumbnail.setOnClickListener(null)
@@ -732,19 +735,51 @@ class MainActivity : SDLActivity(), InputManager.InputDeviceListener {
       getString(R.string.in_game_menu_quit_app),
     )
 
-    val dialog = MaterialAlertDialogBuilder(this, R.style.ThemeOverlay_Xemu_RoundedDialog)
-      .setTitle(getString(R.string.in_game_menu_title))
-      .setItems(options) { _, which ->
-        when (which) {
-          0 -> { /* Resume — dismiss dialog */ }
-          1 -> toggleOnScreenController()
-          2 -> showSaveStateDialog()
-          3 -> showLoadStateDialog()
-          4 -> showRebootSystemConfirmation()
-          5 -> exitToGameLibrary()
-          6 -> quitApp()
-        }
+    val dp = resources.displayMetrics.density
+    lateinit var dialog: androidx.appcompat.app.AlertDialog
+
+    val buttonList = LinearLayout(this).apply {
+      orientation = LinearLayout.VERTICAL
+      setPadding((20 * dp).toInt(), (12 * dp).toInt(), (20 * dp).toInt(), 0)
+      options.forEachIndexed { i, label ->
+        addView(MaterialButton(this@MainActivity, null,
+          com.google.android.material.R.attr.materialButtonOutlinedStyle).apply {
+          text = label
+          layoutParams = LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+          ).also { lp -> lp.bottomMargin = (8 * dp).toInt() }
+          setOnClickListener {
+            dialog.dismiss()
+            when (i) {
+              0 -> { /* Resume — dialog dismissed above */ }
+              1 -> toggleOnScreenController()
+              2 -> showSaveStateDialog()
+              3 -> showLoadStateDialog()
+              4 -> showRebootSystemConfirmation()
+              5 -> exitToGameLibrary()
+              6 -> quitApp()
+            }
+          }
+        })
       }
+    }
+
+    val scrollContainer = NestedScrollView(this).apply {
+      isFillViewport = true
+      overScrollMode = View.OVER_SCROLL_IF_CONTENT_SCROLLS
+      addView(
+        buttonList,
+        ViewGroup.LayoutParams(
+          ViewGroup.LayoutParams.MATCH_PARENT,
+          ViewGroup.LayoutParams.WRAP_CONTENT
+        )
+      )
+    }
+
+    dialog = MaterialAlertDialogBuilder(this, R.style.ThemeOverlay_Xemu_RoundedDialog)
+      .setTitle(getString(R.string.in_game_menu_title))
+      .setView(scrollContainer)
       .setOnDismissListener {
         inGameMenuDialog = null
         hideSystemUI()

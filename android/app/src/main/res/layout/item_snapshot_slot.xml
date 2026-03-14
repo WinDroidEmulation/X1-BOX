@@ -12,7 +12,7 @@
     android:id="@+id/snapshot_thumbnail"
     android:layout_width="120dp"
     android:layout_height="90dp"
-    android:background="#1AFFFFFF"
+    android:background="@color/xemu_surface_container"
     android:contentDescription="@string/snapshot_thumbnail_desc"
     android:scaleType="centerCrop" />
 

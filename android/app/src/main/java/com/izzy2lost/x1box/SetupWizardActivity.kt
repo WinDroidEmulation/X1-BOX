@@ -247,10 +247,10 @@ class SetupWizardActivity : AppCompatActivity() {
     }
     indicators.forEachIndexed { index, view ->
       view.setBackgroundResource(
-        if (currentStep == index) {
-          R.drawable.setup_wizard_indicator_active
-        } else {
-          R.drawable.setup_wizard_indicator_inactive
+        when {
+          currentStep == index -> R.drawable.setup_wizard_indicator_active
+          index < currentStep -> R.drawable.setup_wizard_indicator_complete
+          else -> R.drawable.setup_wizard_indicator_inactive
         }
       )
     }

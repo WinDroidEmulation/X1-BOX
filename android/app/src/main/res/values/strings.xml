@@ -38,14 +38,12 @@
   <string name="setup_disc_value">Games Folder: %1$s</string>
 
   <string name="library_title">Game Library</string>
-  <string name="library_change_folder">Change Folder</string>
   <string name="library_boot_dashboard">Boot Dashboard</string>
   <string name="library_snapshots">Snapshots</string>
   <string name="library_convert_iso">Convert ISO to XISO</string>
   <string name="library_view_list">List</string>
   <string name="library_view_cover_grid">Cover Grid</string>
   <string name="library_box_art_lookup">Look up box art online</string>
-  <string name="library_folder_value">Folder: %1$s</string>
   <string name="library_no_folder">No folder selected</string>
   <string name="library_loading_games">Scanning games...</string>
   <string name="library_converting_game">Converting %1$s...</string>

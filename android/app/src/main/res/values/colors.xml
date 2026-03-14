@@ -1,12 +1,27 @@
 <resources>
-  <color name="xemu_black">#080A08</color>
-  <color name="xemu_surface">#0F120F</color>
-  <color name="xemu_surface_variant">#141914</color>
-  <color name="xemu_text">#E8F5E9</color>
-  <color name="xemu_text_muted">#A3B7A3</color>
+  <!-- Backgrounds -->
+  <color name="xemu_black">#080B08</color>
+  <color name="xemu_surface">#0E1410</color>
+  <color name="xemu_surface_variant">#161D17</color>
+  <color name="xemu_surface_container">#1C261D</color>
+  <color name="xemu_surface_container_high">#222E23</color>
+
+  <!-- Text -->
+  <color name="xemu_text">#EAF6EB</color>
+  <color name="xemu_text_muted">#A8BFA9</color>
+
+  <!-- Xbox Green — primary accent, brighter/more vivid -->
+  <color name="xemu_green">#66FF00</color>
+  <color name="xemu_green_light">#66FF00</color>
+  <color name="xemu_green_dark">#66FF00</color>
+  <color name="xemu_green_container">#1A5224</color>
+
+  <!-- Danger / warning -->
   <color name="xemu_warning">#FF6B6B</color>
-  <color name="xemu_green">#41B14D</color>
-  <color name="xemu_green_dark">#1E7A2E</color>
-  <color name="xemu_outline">#263126</color>
-  <color name="xemu_outline_variant">#1A211A</color>
+  <color name="xemu_warning_container">#4A1515</color>
+
+  <!-- Borders -->
+  <color name="xemu_outline">#66FF00</color>
+  <color name="xemu_outline_variant">#222E23</color>
+  <color name="xemu_outline_shadow">#15330B</color>
 </resources>
