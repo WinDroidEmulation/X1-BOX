@@ -516,6 +516,78 @@
             android:layout_height="wrap_content"
             android:layout_marginBottom="12dp"
             android:background="@drawable/section_header_background"
+            android:text="@string/settings_section_online"
+            android:textAppearance="@style/TextAppearance.Material3.LabelLarge"
+            android:textColor="@color/xemu_green_light" />
+
+          <com.google.android.material.materialswitch.MaterialSwitch
+            android:id="@+id/switch_network_enable"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/settings_online_enable"
+            android:textColor="@color/xemu_text_muted" />
+
+          <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:layout_marginBottom="4dp"
+            android:text="@string/settings_online_hint"
+            android:textAppearance="@style/TextAppearance.Material3.BodySmall"
+            android:textColor="@color/xemu_text_muted" />
+
+          <TextView
+            android:id="@+id/tv_insignia_status"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:textAppearance="@style/TextAppearance.Material3.BodySmall"
+            android:textColor="@color/xemu_text_muted" />
+
+          <com.google.android.material.button.MaterialButton
+            android:id="@+id/btn_insignia_guide"
+            style="@style/Widget.Xemu.Button.Outlined.Pill"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:layout_marginBottom="6dp"
+            android:text="@string/settings_insignia_guide_action" />
+
+          <com.google.android.material.button.MaterialButton
+            android:id="@+id/btn_insignia_sign_up"
+            style="@style/Widget.Xemu.Button.Outlined.Pill"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="6dp"
+            android:text="@string/settings_insignia_sign_up_action" />
+
+          <com.google.android.material.button.MaterialButton
+            android:id="@+id/btn_prepare_insignia"
+            style="@style/Widget.Xemu.Button.Outlined.Pill"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="6dp"
+            android:text="@string/settings_insignia_prepare_action" />
+
+          <com.google.android.material.button.MaterialButton
+            android:id="@+id/btn_register_insignia"
+            style="@style/Widget.Xemu.Button.Outlined.Pill"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/settings_insignia_register_action" />
+
+          <View
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:layout_marginTop="16dp"
+            android:layout_marginBottom="16dp"
+            android:background="@color/xemu_outline_variant" />
+
+          <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="12dp"
+            android:background="@drawable/section_header_background"
             android:text="@string/settings_section_eeprom"
             android:textAppearance="@style/TextAppearance.Material3.LabelLarge"
             android:textColor="@color/xemu_green_light" />
@@ -641,40 +713,74 @@
             android:layout_height="wrap_content"
             android:layout_marginBottom="8dp"
             android:background="@drawable/section_header_background"
-            android:text="@string/settings_section_hdd_tools"
+            android:text="@string/settings_section_advanced_experimental"
             android:textAppearance="@style/TextAppearance.Material3.LabelLarge"
             android:textColor="@color/xemu_green_light" />
 
           <TextView
-            android:id="@+id/tv_hdd_tools_status"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
+            android:layout_marginBottom="10dp"
+            android:text="@string/settings_advanced_experimental_hint"
             android:textAppearance="@style/TextAppearance.Material3.BodySmall"
             android:textColor="@color/xemu_text_muted" />
 
-          <TextView
+          <com.google.android.material.button.MaterialButton
+            android:id="@+id/btn_toggle_advanced_experimental"
+            style="@style/Widget.Xemu.Button.Outlined.Pill"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:layout_marginBottom="10dp"
-            android:text="@string/settings_hdd_tools_hint"
-            android:textAppearance="@style/TextAppearance.Material3.BodySmall"
-            android:textColor="@color/xemu_text_muted" />
+            android:text="@string/settings_advanced_experimental_show" />
+
+          <LinearLayout
+            android:id="@+id/layout_advanced_experimental_content"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:orientation="vertical"
+            android:visibility="gone">
+
+            <TextView
+              android:layout_width="wrap_content"
+              android:layout_height="wrap_content"
+              android:layout_marginBottom="8dp"
+              android:background="@drawable/section_header_background"
+              android:text="@string/settings_section_hdd_tools"
+              android:textAppearance="@style/TextAppearance.Material3.LabelLarge"
+              android:textColor="@color/xemu_green_light" />
+
+            <TextView
+              android:id="@+id/tv_hdd_tools_status"
+              android:layout_width="match_parent"
+              android:layout_height="wrap_content"
+              android:textAppearance="@style/TextAppearance.Material3.BodySmall"
+              android:textColor="@color/xemu_text_muted" />
+
+            <TextView
+              android:layout_width="match_parent"
+              android:layout_height="wrap_content"
+              android:layout_marginTop="8dp"
+              android:layout_marginBottom="10dp"
+              android:text="@string/settings_hdd_tools_hint"
+              android:textAppearance="@style/TextAppearance.Material3.BodySmall"
+              android:textColor="@color/xemu_text_muted" />
 
             <com.google.android.material.button.MaterialButton
               android:id="@+id/btn_initialize_retail_hdd"
-            style="@style/Widget.Xemu.Button.Outlined.Pill"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginBottom="6dp"
-            android:text="@string/settings_hdd_init_action" />
+              style="@style/Widget.Xemu.Button.Outlined.Pill"
+              android:layout_width="match_parent"
+              android:layout_height="wrap_content"
+              android:layout_marginBottom="6dp"
+              android:text="@string/settings_hdd_init_action" />
 
-          <com.google.android.material.button.MaterialButton
-            android:id="@+id/btn_import_dashboard"
-            style="@style/Widget.Xemu.Button.Outlined.Pill"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="@string/settings_dashboard_import_action" />
+            <com.google.android.material.button.MaterialButton
+              android:id="@+id/btn_import_dashboard"
+              style="@style/Widget.Xemu.Button.Outlined.Pill"
+              android:layout_width="match_parent"
+              android:layout_height="wrap_content"
+              android:text="@string/settings_dashboard_import_action" />
+
+          </LinearLayout>
 
           <View
             android:layout_width="match_parent"

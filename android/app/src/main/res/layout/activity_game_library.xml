@@ -83,6 +83,14 @@
             app:iconTint="@color/xemu_black"
             app:iconPadding="10dp" />
 
+          <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="@string/library_boot_dashboard_note"
+            android:textAppearance="@style/TextAppearance.Material3.BodySmall"
+            android:textColor="@color/xemu_text_muted" />
+
           <!-- Secondary actions: outlined pills with explicit spring (not in toggle group) -->
           <com.google.android.material.button.MaterialButton
             android:id="@+id/btn_settings"

@@ -725,6 +725,7 @@ struct EmulatorSettings {
   bool hard_fpu        = true;
   bool vsync           = true;
   bool skip_boot_anim  = false;
+  bool network_enabled = false;
 };
 
 struct SetupFiles {
@@ -773,11 +774,13 @@ static bool WriteConfigToml(const std::string& config_path,
   toml::table* audio = EnsureTable(tbl, "audio");
   toml::table* audio_vp = EnsureTable(*audio, "vp");
   toml::table* android = EnsureTable(tbl, "android");
+  toml::table* net = EnsureTable(tbl, "net");
+  toml::table* net_nat = EnsureTable(*net, "nat");
   toml::table* sys = EnsureTable(tbl, "sys");
   toml::table* perf = EnsureTable(tbl, "perf");
   toml::table* files = EnsureTable(*sys, "files");
   if (!general || !display || !display_quality || !display_window || !audio ||
-      !audio_vp || !android || !sys || !perf || !files) {
+      !audio_vp || !android || !net || !net_nat || !sys || !perf || !files) {
     LogErrorFmt("Failed to build config tables at %s", config_path.c_str());
     return false;
   }
@@ -826,6 +829,8 @@ static bool WriteConfigToml(const std::string& config_path,
   if (!android->contains("audio_driver")) {
     android->insert_or_assign("audio_driver", "openslES");
   }
+  net->insert_or_assign("enable", settings.network_enabled);
+  net->insert_or_assign("backend", "nat");
   sys->insert_or_assign(
       "mem_limit", settings.system_memory_mib == 128 ? "128" : "64");
 
@@ -965,6 +970,8 @@ static SetupFiles SyncSetupFiles() {
   emuSettings.hard_fpu       = GetPrefBool(env, activity, "setting_hard_fpu", true);
   emuSettings.skip_boot_anim =
       GetPrefBool(env, activity, "setting_skip_boot_anim", false);
+  emuSettings.network_enabled =
+      GetPrefBool(env, activity, "setting_network_enable", false);
   {
     std::string tcgThread = GetPrefString(env, activity, "setting_tcg_thread");
     if (tcgThread == "single") {

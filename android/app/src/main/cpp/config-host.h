@@ -8,6 +8,7 @@
 #define CONFIG_SDL 1
 #define CONFIG_SDL2 1
 #define CONFIG_AUDIO_SDL 1
+#define CONFIG_SLIRP 1
 #define CONFIG_AUDIO_DRIVERS "sdl",
 #define CONFIG_DEVICES "config-devices.h"
 

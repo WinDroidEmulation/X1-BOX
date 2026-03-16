@@ -157,6 +157,38 @@ static void xemu_fatx_propagate_error(XemuFatxFs *fs, Error **errp, const char *
     }
 }
 
+static bool xemu_fatx_ascii_equal_n(const char *left, const char *right, size_t len)
+{
+    size_t i;
+
+    for (i = 0; i < len; ++i) {
+        if (!left[i] || !right[i]) {
+            return false;
+        }
+        if (g_ascii_tolower(left[i]) != g_ascii_tolower(right[i])) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+static bool xemu_fatx_ascii_equal(const char *left, const char *right)
+{
+    size_t left_len = strlen(left);
+    size_t right_len = strlen(right);
+
+    return left_len == right_len && xemu_fatx_ascii_equal_n(left, right, left_len);
+}
+
+static bool xemu_fatx_ascii_starts_with(const char *value, const char *prefix)
+{
+    size_t prefix_len = strlen(prefix);
+
+    return strlen(value) >= prefix_len &&
+           xemu_fatx_ascii_equal_n(value, prefix, prefix_len);
+}
+
 static bool xemu_fatx_read_bytes(BlockBackend *blk,
                                  uint64_t offset,
                                  void *buffer,
@@ -785,7 +817,7 @@ static int xemu_fatx_open_dir(XemuFatxFs *fs, const char *path, XemuFatxDir *dir
             if (status == XEMU_FATX_STATUS_SUCCESS) {
                 if ((attr.attributes & XEMU_FATX_ATTR_DIRECTORY) != 0 &&
                     strlen(dirent.filename) == len &&
-                    memcmp(dirent.filename, start, len) == 0) {
+                    xemu_fatx_ascii_equal_n(dirent.filename, start, len)) {
                     dir->cluster = attr.first_cluster;
                     dir->entry = 0;
                     break;
@@ -817,7 +849,7 @@ static int xemu_fatx_get_attr_dir(XemuFatxFs *fs,
     while (1) {
         status = xemu_fatx_read_dir(fs, dir, dirent, attr);
         if (status == XEMU_FATX_STATUS_SUCCESS) {
-            if (strcmp(basename, dirent->filename) == 0) {
+            if (xemu_fatx_ascii_equal(basename, dirent->filename)) {
                 return XEMU_FATX_STATUS_SUCCESS;
             }
         } else if (status == XEMU_FATX_STATUS_FILE_DELETED) {
@@ -1283,7 +1315,7 @@ static int xemu_fatx_unlink(XemuFatxFs *fs, const char *path)
     while (1) {
         status = xemu_fatx_read_dir(fs, &dir, &entry, &attr);
         if (status == XEMU_FATX_STATUS_SUCCESS) {
-            if (strcmp(entry.filename, basename) == 0) {
+            if (xemu_fatx_ascii_equal(entry.filename, basename)) {
                 break;
             }
         } else if (status == XEMU_FATX_STATUS_FILE_DELETED) {
@@ -1683,6 +1715,138 @@ static bool xemu_dashboard_import_partition(BlockBackend *blk,
         status = xemu_fatx_import_host_tree(&fs, source_dir, "/");
     }
     if (status != XEMU_FATX_STATUS_SUCCESS) {
+        xemu_fatx_propagate_error(&fs, errp, NULL);
+        xemu_fatx_close_fs(&fs);
+        return false;
+    }
+
+    xemu_fatx_close_fs(&fs);
+    return true;
+}
+
+static bool xemu_fatx_probe_path(XemuFatxFs *fs,
+                                 const char *path,
+                                 bool *exists_out,
+                                 bool *is_dir_out)
+{
+    XemuFatxAttr attr;
+    int status = xemu_fatx_get_attr(fs, path, &attr);
+
+    if (status == XEMU_FATX_STATUS_SUCCESS) {
+        if (exists_out) {
+            *exists_out = true;
+        }
+        if (is_dir_out) {
+            *is_dir_out = (attr.attributes & XEMU_FATX_ATTR_DIRECTORY) != 0;
+        }
+        return true;
+    }
+
+    if (status == XEMU_FATX_STATUS_FILE_NOT_FOUND) {
+        if (exists_out) {
+            *exists_out = false;
+        }
+        if (is_dir_out) {
+            *is_dir_out = false;
+        }
+        return true;
+    }
+
+    return false;
+}
+
+static bool xemu_fatx_scan_root_dashboard_markers(XemuFatxFs *fs,
+                                                  XemuFatxDashboardStatus *status,
+                                                  Error **errp)
+{
+    XemuFatxDir dir;
+    XemuFatxDirent dirent;
+    XemuFatxAttr attr;
+    int scan_status;
+
+    if (!status) {
+        return true;
+    }
+
+    scan_status = xemu_fatx_open_dir(fs, "/", &dir);
+    if (scan_status != XEMU_FATX_STATUS_SUCCESS) {
+        xemu_fatx_propagate_error(fs, errp, NULL);
+        return false;
+    }
+
+    while (1) {
+        scan_status = xemu_fatx_read_dir(fs, &dir, &dirent, &attr);
+        if (scan_status == XEMU_FATX_STATUS_SUCCESS) {
+            if ((attr.attributes & XEMU_FATX_ATTR_DIRECTORY) != 0) {
+                if (xemu_fatx_ascii_equal(dirent.filename, "xodash")) {
+                    status->xodash_dir_present = true;
+                } else if (xemu_fatx_ascii_equal(dirent.filename, "audio")) {
+                    status->audio_dir_present = true;
+                } else if (xemu_fatx_ascii_equal(dirent.filename, "fonts")) {
+                    status->fonts_dir_present = true;
+                } else if (xemu_fatx_ascii_starts_with(dirent.filename, "xboxdashdata.")) {
+                    status->xboxdashdata_dir_present = true;
+                }
+            } else {
+                if (xemu_fatx_ascii_equal(dirent.filename, "xboxdash.xbe")) {
+                    status->xboxdash_xbe_present = true;
+                } else if (xemu_fatx_ascii_equal(dirent.filename, "msdash.xbe")) {
+                    status->msdash_xbe_present = true;
+                } else if (xemu_fatx_ascii_equal(dirent.filename, "xbox.xtf")) {
+                    status->xbox_xtf_present = true;
+                }
+            }
+        } else if (scan_status == XEMU_FATX_STATUS_FILE_DELETED) {
+            /* Skip. */
+        } else if (scan_status == XEMU_FATX_STATUS_END_OF_DIR) {
+            return true;
+        } else {
+            xemu_fatx_propagate_error(fs, errp, NULL);
+            return false;
+        }
+
+        scan_status = xemu_fatx_next_dir_entry(fs, &dir);
+        if (scan_status != XEMU_FATX_STATUS_SUCCESS) {
+            xemu_fatx_propagate_error(fs, errp, NULL);
+            return false;
+        }
+    }
+}
+
+bool xemu_fatx_inspect_retail_dashboard(BlockBackend *blk,
+                                        XemuFatxDashboardStatus *status,
+                                        Error **errp)
+{
+    XemuFatxFs fs;
+    bool ok = true;
+
+    if (status) {
+        memset(status, 0, sizeof(*status));
+    }
+
+    if (!xemu_fatx_open_fs(&fs, blk,
+                           XEMU_XBOX_HDD_PARTITION_C_OFFSET,
+                           XEMU_XBOX_HDD_PARTITION_C_SIZE,
+                           errp)) {
+        return false;
+    }
+
+    if (status) {
+        bool is_dir = false;
+
+        ok = xemu_fatx_probe_path(&fs, "/xboxdash.xbe",
+                                  &status->xboxdash_xbe_present, NULL) &&
+             xemu_fatx_probe_path(&fs, "/msdash.xbe",
+                                  &status->msdash_xbe_present, NULL) &&
+             xemu_fatx_probe_path(&fs, "/xbox.xtf",
+                                  &status->xbox_xtf_present, NULL) &&
+             xemu_fatx_probe_path(&fs, "/xodash",
+                                  &status->xodash_dir_present, &is_dir);
+        status->xodash_dir_present = status->xodash_dir_present && is_dir;
+        ok = ok && xemu_fatx_scan_root_dashboard_markers(&fs, status, errp);
+    }
+
+    if (!ok) {
         xemu_fatx_propagate_error(&fs, errp, NULL);
         xemu_fatx_close_fs(&fs);
         return false;

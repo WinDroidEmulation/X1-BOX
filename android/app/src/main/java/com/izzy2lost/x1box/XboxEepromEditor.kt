@@ -14,6 +14,8 @@ internal object XboxEepromEditor {
   private const val USER_CHECKSUM_START  = 0x64
   private const val USER_CHECKSUM_LENGTH = 0x5C
 
+  private const val XBOX_LIVE_DNS_OFFSET = 0xAC
+
   private const val VIDEO_STANDARD_OFFSET = 0x58
   private const val LANGUAGE_OFFSET       = 0x90
   private const val VIDEO_SETTINGS_OFFSET = 0x94
@@ -181,6 +183,34 @@ internal object XboxEepromEditor {
 
     val factoryChecksum = xboxChecksum(data, FACTORY_CHECKSUM_START, FACTORY_CHECKSUM_LENGTH)
     writeLeUInt32(data, FACTORY_CHECKSUM_OFFSET, factoryChecksum)
+
+    val userChecksum = xboxChecksum(data, USER_CHECKSUM_START, USER_CHECKSUM_LENGTH)
+    writeLeUInt32(data, USER_CHECKSUM_OFFSET, userChecksum)
+
+    file.writeBytes(data)
+    return true
+  }
+
+  @Throws(IOException::class, IllegalArgumentException::class)
+  fun applyXboxLiveDns(
+    file: File,
+    dnsServer: ByteArray,
+  ): Boolean {
+    require(dnsServer.size == 4) { "Xbox Live DNS must be a 4-byte IPv4 address." }
+
+    val data = file.readBytes()
+    ensureValidSize(file, data)
+
+    var changed = false
+    for (index in dnsServer.indices) {
+      if (data[XBOX_LIVE_DNS_OFFSET + index] != dnsServer[index]) {
+        data[XBOX_LIVE_DNS_OFFSET + index] = dnsServer[index]
+        changed = true
+      }
+    }
+    if (!changed) {
+      return false
+    }
 
     val userChecksum = xboxChecksum(data, USER_CHECKSUM_START, USER_CHECKSUM_LENGTH)
     writeLeUInt32(data, USER_CHECKSUM_OFFSET, userChecksum)

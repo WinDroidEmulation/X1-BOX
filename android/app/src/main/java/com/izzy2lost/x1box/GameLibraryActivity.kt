@@ -257,6 +257,22 @@ class GameLibraryActivity : AppCompatActivity() {
       return
     }
 
+    resolveConfiguredLocalHddFile()?.let { hddFile ->
+      runCatching { XboxInsigniaHelper.inspectDashboard(hddFile) }
+        .getOrNull()
+        ?.let { dashboardStatus ->
+          if (!dashboardStatus.looksRetailDashboardInstalled) {
+            val messageRes = if (dashboardStatus.hasAnyRetailDashboardFiles) {
+              R.string.library_boot_dashboard_incomplete_retail
+            } else {
+              R.string.library_boot_dashboard_missing_retail
+            }
+            Toast.makeText(this, getString(messageRes), Toast.LENGTH_LONG).show()
+            return
+          }
+        }
+    }
+
     // MainActivity runs in :xemu, so the disc selection must be flushed before
     // the other process reads SharedPreferences during startup.
     prefs.edit()
@@ -283,6 +299,12 @@ class GameLibraryActivity : AppCompatActivity() {
 
     val uri = prefs.getString(uriKey, null)?.let(Uri::parse)
     return uri != null && hasPersistedReadPermission(uri)
+  }
+
+  private fun resolveConfiguredLocalHddFile(): File? {
+    val path = prefs.getString("hddPath", null) ?: return null
+    val file = File(path)
+    return file.takeIf { it.isFile }
   }
 
   private fun slotName(slot: Int) = "android_slot_$slot"

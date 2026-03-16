@@ -27,6 +27,16 @@
 #define ANDROID_XBOX_HDD_REFURB_OFFSET 0x600ULL
 #define ANDROID_XBOX_HDD_REFURB_SIGNATURE 0x42524652U
 
+#define ANDROID_XBOX_HDD_CONFIG_STATIC_PRIMARY_DNS_OFFSET 0x102CULL
+#define ANDROID_XBOX_HDD_CONFIG_STATIC_SECONDARY_DNS_OFFSET 0x1030ULL
+#define ANDROID_XBOX_HDD_CONFIG_XBLIVE_PRIMARY_DNS_OFFSET 0x1060ULL
+#define ANDROID_XBOX_HDD_CONFIG_XBLIVE_SECONDARY_DNS_OFFSET 0x1064ULL
+#define ANDROID_XBOX_HDD_CONFIG_DHCP_PRIMARY_DNS_OFFSET 0x1178ULL
+#define ANDROID_XBOX_HDD_CONFIG_DHCP_SECONDARY_DNS_OFFSET 0x117CULL
+#define ANDROID_XBOX_HDD_CONFIG_PPPOE_PRIMARY_DNS_OFFSET 0x118CULL
+#define ANDROID_XBOX_HDD_CONFIG_PPPOE_SECONDARY_DNS_OFFSET 0x1190ULL
+#define ANDROID_XBOX_HDD_CONFIG_MINIMUM_BYTES 0x1194ULL
+
 #define ANDROID_XBOX_HDD_FATX_SIGNATURE 0x58544146U
 #define ANDROID_XBOX_HDD_FATX_SUPERBLOCK_SIZE 4096ULL
 #define ANDROID_XBOX_HDD_FATX_FAT_OFFSET ANDROID_XBOX_HDD_FATX_SUPERBLOCK_SIZE
@@ -81,6 +91,13 @@ static const AndroidXboxHddPartition g_android_xbox_hdd_retail_partitions[] = {
 static pthread_mutex_t g_android_xbox_hdd_init_lock = PTHREAD_MUTEX_INITIALIZER;
 static bool g_android_xbox_hdd_init_complete;
 static char *g_android_xbox_hdd_init_failure;
+
+static bool android_xbox_hdd_write_bytes(BlockBackend *blk,
+                                         uint64_t offset,
+                                         const void *buffer,
+                                         uint64_t size,
+                                         const char *label,
+                                         Error **errp);
 
 static void android_xbox_hdd_throw_exception(JNIEnv *env,
                                              const char *class_name,
@@ -231,6 +248,38 @@ static BlockBackend *android_xbox_hdd_open_backend(const char *path,
     return blk_new_open(path, NULL, options, flags, errp);
 }
 
+static bool android_xbox_hdd_copy_ipv4(JNIEnv *env,
+                                       jbyteArray array,
+                                       uint8_t out[4],
+                                       const char *label)
+{
+    jbyte buffer[4];
+    jsize length;
+
+    if (!array) {
+        android_xbox_hdd_throw_exception(env, "java/lang/IllegalArgumentException",
+                                         label);
+        return false;
+    }
+
+    length = (*env)->GetArrayLength(env, array);
+    if (length != 4) {
+        android_xbox_hdd_throw_exception(env, "java/lang/IllegalArgumentException",
+                                         label);
+        return false;
+    }
+
+    (*env)->GetByteArrayRegion(env, array, 0, 4, buffer);
+    if ((*env)->ExceptionCheck(env)) {
+        return false;
+    }
+
+    for (size_t i = 0; i < 4; ++i) {
+        out[i] = (uint8_t)buffer[i];
+    }
+    return true;
+}
+
 static bool android_xbox_hdd_inspect_locked(const char *path,
                                             AndroidXboxHddFormat *format,
                                             int64_t *total_bytes,
@@ -256,6 +305,119 @@ static bool android_xbox_hdd_inspect_locked(const char *path,
     }
 
     *total_bytes = length;
+    ok = true;
+
+cleanup:
+    if (blk) {
+        blk_drain(blk);
+        blk_unref(blk);
+    }
+    return ok;
+}
+
+static bool android_xbox_hdd_inspect_dashboard_locked(const char *path,
+                                                      jint *flags_out,
+                                                      Error **errp)
+{
+    BlockBackend *blk = NULL;
+    XemuFatxDashboardStatus status;
+    bool ok = false;
+    jint flags = 0;
+
+    blk = android_xbox_hdd_open_backend(path, false, errp);
+    if (!blk) {
+        return false;
+    }
+
+    if (!xemu_fatx_inspect_retail_dashboard(blk, &status, errp)) {
+        goto cleanup;
+    }
+
+    if (status.xboxdash_xbe_present) {
+        flags |= 1 << 0;
+    }
+    if (status.xodash_dir_present) {
+        flags |= 1 << 1;
+    }
+    if (status.xbox_xtf_present) {
+        flags |= 1 << 2;
+    }
+    if (status.msdash_xbe_present) {
+        flags |= 1 << 3;
+    }
+    if (status.audio_dir_present) {
+        flags |= 1 << 4;
+    }
+    if (status.fonts_dir_present) {
+        flags |= 1 << 5;
+    }
+    if (status.xboxdashdata_dir_present) {
+        flags |= 1 << 6;
+    }
+
+    if (flags_out) {
+        *flags_out = flags;
+    }
+    ok = true;
+
+cleanup:
+    if (blk) {
+        blk_drain(blk);
+        blk_unref(blk);
+    }
+    return ok;
+}
+
+static bool android_xbox_hdd_write_insignia_dns_locked(const char *path,
+                                                       const uint8_t primary_dns[4],
+                                                       const uint8_t secondary_dns[4],
+                                                       Error **errp)
+{
+    static const uint64_t primary_offsets[] = {
+        ANDROID_XBOX_HDD_CONFIG_STATIC_PRIMARY_DNS_OFFSET,
+        ANDROID_XBOX_HDD_CONFIG_XBLIVE_PRIMARY_DNS_OFFSET,
+        ANDROID_XBOX_HDD_CONFIG_DHCP_PRIMARY_DNS_OFFSET,
+        ANDROID_XBOX_HDD_CONFIG_PPPOE_PRIMARY_DNS_OFFSET,
+    };
+    static const uint64_t secondary_offsets[] = {
+        ANDROID_XBOX_HDD_CONFIG_STATIC_SECONDARY_DNS_OFFSET,
+        ANDROID_XBOX_HDD_CONFIG_XBLIVE_SECONDARY_DNS_OFFSET,
+        ANDROID_XBOX_HDD_CONFIG_DHCP_SECONDARY_DNS_OFFSET,
+        ANDROID_XBOX_HDD_CONFIG_PPPOE_SECONDARY_DNS_OFFSET,
+    };
+    BlockBackend *blk = NULL;
+    int64_t total_bytes;
+    bool ok = false;
+
+    blk = android_xbox_hdd_open_backend(path, true, errp);
+    if (!blk) {
+        return false;
+    }
+
+    total_bytes = blk_getlength(blk);
+    if (total_bytes < 0) {
+        error_setg(errp, "Could not determine the HDD size: %s", g_strerror(-total_bytes));
+        goto cleanup;
+    }
+    if ((uint64_t)total_bytes < ANDROID_XBOX_HDD_CONFIG_MINIMUM_BYTES) {
+        error_setg(errp, "The current HDD image is too small to contain the Xbox config sector");
+        goto cleanup;
+    }
+
+    for (size_t i = 0; i < G_N_ELEMENTS(primary_offsets); ++i) {
+        if (!android_xbox_hdd_write_bytes(blk, primary_offsets[i], primary_dns, 4,
+                                          "Insignia primary DNS", errp) ||
+            !android_xbox_hdd_write_bytes(blk, secondary_offsets[i], secondary_dns, 4,
+                                          "Insignia secondary DNS", errp)) {
+            goto cleanup;
+        }
+    }
+
+    if (blk_flush(blk) < 0) {
+        error_setg(errp, "Failed to flush Insignia DNS writes");
+        goto cleanup;
+    }
+
     ok = true;
 
 cleanup:
@@ -818,6 +980,102 @@ Java_com_izzy2lost_x1box_XboxHddFormatter_00024NativeBridge_nativeInitializeHdd(
     }
 
     (*env)->ReleaseStringUTFChars(env, jpath, path);
+}
+
+JNIEXPORT jint JNICALL
+Java_com_izzy2lost_x1box_XboxInsigniaHelper_00024NativeBridge_nativeInspectDashboardFlags(
+        JNIEnv *env, jobject obj, jstring jhdd_path)
+{
+    const char *hdd_path;
+    Error *err = NULL;
+    jint flags = 0;
+
+    (void)obj;
+
+    if (!jhdd_path) {
+        android_xbox_hdd_throw_exception(env, "java/io/IOException",
+                                         "No local HDD image is configured.");
+        return 0;
+    }
+
+    hdd_path = (*env)->GetStringUTFChars(env, jhdd_path, NULL);
+    if (!hdd_path) {
+        return 0;
+    }
+
+    if (!android_xbox_hdd_ensure_block_layer(&err)) {
+        (*env)->ReleaseStringUTFChars(env, jhdd_path, hdd_path);
+        android_xbox_hdd_throw_error(env, "java/io/IOException",
+                                     "Failed to initialize HDD tools: ", err);
+        return 0;
+    }
+
+    {
+        BQL_LOCK_GUARD();
+        if (!android_xbox_hdd_inspect_dashboard_locked(hdd_path, &flags, &err)) {
+            (*env)->ReleaseStringUTFChars(env, jhdd_path, hdd_path);
+            android_xbox_hdd_throw_error(env, "java/io/IOException", NULL, err);
+            return 0;
+        }
+    }
+
+    (*env)->ReleaseStringUTFChars(env, jhdd_path, hdd_path);
+    return flags;
+}
+
+JNIEXPORT void JNICALL
+Java_com_izzy2lost_x1box_XboxInsigniaHelper_00024NativeBridge_nativeApplyConfigSectorDns(
+        JNIEnv *env,
+        jobject obj,
+        jstring jhdd_path,
+        jbyteArray jprimary_dns,
+        jbyteArray jsecondary_dns)
+{
+    const char *hdd_path;
+    uint8_t primary_dns[4];
+    uint8_t secondary_dns[4];
+    Error *err = NULL;
+
+    (void)obj;
+
+    if (!jhdd_path) {
+        android_xbox_hdd_throw_exception(env, "java/io/IOException",
+                                         "No local HDD image is configured.");
+        return;
+    }
+
+    if (!android_xbox_hdd_copy_ipv4(env, jprimary_dns, primary_dns,
+                                    "Insignia primary DNS must be an IPv4 address.") ||
+        !android_xbox_hdd_copy_ipv4(env, jsecondary_dns, secondary_dns,
+                                    "Insignia secondary DNS must be an IPv4 address.")) {
+        return;
+    }
+
+    hdd_path = (*env)->GetStringUTFChars(env, jhdd_path, NULL);
+    if (!hdd_path) {
+        return;
+    }
+
+    if (!android_xbox_hdd_ensure_block_layer(&err)) {
+        (*env)->ReleaseStringUTFChars(env, jhdd_path, hdd_path);
+        android_xbox_hdd_throw_error(env, "java/io/IOException",
+                                     "Failed to initialize HDD tools: ", err);
+        return;
+    }
+
+    {
+        BQL_LOCK_GUARD();
+        if (!android_xbox_hdd_write_insignia_dns_locked(hdd_path,
+                                                        primary_dns,
+                                                        secondary_dns,
+                                                        &err)) {
+            (*env)->ReleaseStringUTFChars(env, jhdd_path, hdd_path);
+            android_xbox_hdd_throw_error(env, "java/io/IOException", NULL, err);
+            return;
+        }
+    }
+
+    (*env)->ReleaseStringUTFChars(env, jhdd_path, hdd_path);
 }
 
 JNIEXPORT void JNICALL

@@ -6,6 +6,7 @@ import android.net.Uri
 import android.os.Bundle
 import android.provider.OpenableColumns
 import android.text.format.Formatter
+import android.view.View
 import android.widget.ArrayAdapter
 import android.widget.AutoCompleteTextView
 import android.widget.LinearLayout
@@ -29,6 +30,13 @@ import java.util.Locale
 import java.util.zip.ZipInputStream
 
 class SettingsActivity : AppCompatActivity() {
+  companion object {
+    private const val PREF_ADVANCED_EXPERIMENTAL_EXPANDED = "settings_advanced_experimental_expanded"
+    private const val PREF_INSIGNIA_SETUP_URI = "setting_insignia_setup_assistant_uri"
+    private const val PREF_INSIGNIA_SETUP_NAME = "setting_insignia_setup_assistant_name"
+    private const val INSIGNIA_SIGN_UP_URL = "https://insignia.live/"
+    private const val INSIGNIA_GUIDE_URL = "https://insignia.live/guide/connect"
+  }
 
   private val prefs by lazy { getSharedPreferences("x1box_prefs", Context.MODE_PRIVATE) }
 
@@ -74,6 +82,15 @@ class SettingsActivity : AppCompatActivity() {
     val retailBootReady: Boolean,
   )
 
+  private data class InsigniaStatusSnapshot(
+    val hasLocalHdd: Boolean,
+    val hasEeprom: Boolean,
+    val dashboardStatus: XboxInsigniaHelper.DashboardStatus?,
+    val dashboardError: String?,
+    val setupAssistantName: String?,
+    val setupAssistantReady: Boolean,
+  )
+
   private val eepromLanguageOptions = listOf(
     EepromLanguageOption(XboxEepromEditor.Language.ENGLISH, R.string.settings_eeprom_language_english),
     EepromLanguageOption(XboxEepromEditor.Language.JAPANESE, R.string.settings_eeprom_language_japanese),
@@ -110,11 +127,20 @@ class SettingsActivity : AppCompatActivity() {
   private var clearVulkan = false
   private var isInitializingHdd = false
   private var isImportingDashboard = false
+  private var isPreparingInsignia = false
 
+  private lateinit var switchNetworkEnable: MaterialSwitch
   private lateinit var tvVulkanDriverName: TextView
+  private lateinit var tvInsigniaStatus: TextView
   private lateinit var tvEepromStatus: TextView
   private lateinit var tvHddToolsStatus: TextView
+  private lateinit var btnToggleAdvancedExperimental: MaterialButton
+  private lateinit var btnInsigniaGuide: MaterialButton
+  private lateinit var btnInsigniaSignUp: MaterialButton
+  private lateinit var btnPrepareInsignia: MaterialButton
+  private lateinit var btnRegisterInsignia: MaterialButton
   private lateinit var btnImportDashboard: MaterialButton
+  private lateinit var layoutAdvancedExperimentalContent: LinearLayout
   private lateinit var inputEepromLanguage: TextInputLayout
   private lateinit var inputEepromVideoStandard: TextInputLayout
   private lateinit var inputEepromAspectRatio: TextInputLayout
@@ -162,6 +188,23 @@ class SettingsActivity : AppCompatActivity() {
       prepareDashboardImportFromFolder(uri)
     }
 
+  private val pickInsigniaSetupAssistant =
+    registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
+      uri ?: return@registerForActivityResult
+      persistUriPermission(uri)
+
+      val name = getFileName(uri)
+        ?: uri.lastPathSegment
+        ?: getString(R.string.settings_insignia_setup_source_unknown)
+      prefs.edit()
+        .putString(PREF_INSIGNIA_SETUP_URI, uri.toString())
+        .putString(PREF_INSIGNIA_SETUP_NAME, name)
+        .apply()
+
+      refreshInsigniaStatus()
+      launchInsigniaSetupAssistant(uri)
+    }
+
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
     setContentView(R.layout.activity_settings)
@@ -191,7 +234,15 @@ class SettingsActivity : AppCompatActivity() {
     val btnRedoSetup      = findViewById<MaterialButton>(R.id.btn_redo_setup_wizard)
     val btnClearCache     = findViewById<MaterialButton>(R.id.btn_clear_system_cache)
     val btnInitializeRetailHdd = findViewById<MaterialButton>(R.id.btn_initialize_retail_hdd)
+    switchNetworkEnable  = findViewById(R.id.switch_network_enable)
+    tvInsigniaStatus     = findViewById(R.id.tv_insignia_status)
+    btnToggleAdvancedExperimental = findViewById(R.id.btn_toggle_advanced_experimental)
+    btnInsigniaGuide     = findViewById(R.id.btn_insignia_guide)
+    btnInsigniaSignUp    = findViewById(R.id.btn_insignia_sign_up)
+    btnPrepareInsignia   = findViewById(R.id.btn_prepare_insignia)
+    btnRegisterInsignia  = findViewById(R.id.btn_register_insignia)
     btnImportDashboard   = findViewById(R.id.btn_import_dashboard)
+    layoutAdvancedExperimentalContent = findViewById(R.id.layout_advanced_experimental_content)
     tvVulkanDriverName    = findViewById(R.id.tv_vulkan_driver_name)
     val btnVulkanBrowse   = findViewById<MaterialButton>(R.id.btn_vulkan_browse)
     val btnVulkanClear    = findViewById<MaterialButton>(R.id.btn_vulkan_clear)
@@ -268,6 +319,8 @@ class SettingsActivity : AppCompatActivity() {
     switchVsync.isChecked   = prefs.getBoolean("setting_vsync", true)
     switchSkipBootAnim.isChecked =
       prefs.getBoolean("setting_skip_boot_anim", false)
+    switchNetworkEnable.isChecked =
+      prefs.getBoolean("setting_network_enable", false)
 
     val audioDriver = prefs.getString("setting_audio_driver", "openslES") ?: "openslES"
     when (audioDriver) {
@@ -294,7 +347,26 @@ class SettingsActivity : AppCompatActivity() {
     }
 
     setupEepromEditor()
+    refreshInsigniaStatus()
     refreshHddToolsPreview(btnInitializeRetailHdd)
+    setAdvancedExperimentalExpanded(
+      prefs.getBoolean(PREF_ADVANCED_EXPERIMENTAL_EXPANDED, false)
+    )
+    btnToggleAdvancedExperimental.setOnClickListener {
+      setAdvancedExperimentalExpanded(layoutAdvancedExperimentalContent.visibility != View.VISIBLE)
+    }
+    btnInsigniaGuide.setOnClickListener {
+      openExternalLink(INSIGNIA_GUIDE_URL)
+    }
+    btnInsigniaSignUp.setOnClickListener {
+      openExternalLink(INSIGNIA_SIGN_UP_URL)
+    }
+    btnPrepareInsignia.setOnClickListener {
+      prepareInsigniaNetworking()
+    }
+    btnRegisterInsignia.setOnClickListener {
+      showInsigniaSetupAssistantPrompt()
+    }
     btnImportDashboard.setOnClickListener {
       showDashboardImportSourcePicker()
     }
@@ -349,6 +421,7 @@ class SettingsActivity : AppCompatActivity() {
         .putBoolean("setting_hard_fpu", switchFpu.isChecked)
         .putBoolean("setting_vsync", switchVsync.isChecked)
         .putBoolean("setting_skip_boot_anim", switchSkipBootAnim.isChecked)
+        .putBoolean("setting_network_enable", switchNetworkEnable.isChecked)
         .putString("setting_audio_driver", selectedAudioDriver)
         .putString("setting_filtering", selectedFiltering)
         .putString("setting_renderer", selectedRenderer)
@@ -380,6 +453,224 @@ class SettingsActivity : AppCompatActivity() {
       Toast.makeText(this, toastResult.first, toastResult.second).show()
       finish()
     }
+  }
+
+  private fun setAdvancedExperimentalExpanded(expanded: Boolean) {
+    layoutAdvancedExperimentalContent.visibility = if (expanded) View.VISIBLE else View.GONE
+    btnToggleAdvancedExperimental.text = getString(
+      if (expanded) {
+        R.string.settings_advanced_experimental_hide
+      } else {
+        R.string.settings_advanced_experimental_show
+      }
+    )
+    prefs.edit().putBoolean(PREF_ADVANCED_EXPERIMENTAL_EXPANDED, expanded).apply()
+  }
+
+  private fun openExternalLink(url: String) {
+    val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
+      addCategory(Intent.CATEGORY_BROWSABLE)
+    }
+    try {
+      startActivity(intent)
+    } catch (_: Exception) {
+      Toast.makeText(this, getString(R.string.library_about_open_failed), Toast.LENGTH_SHORT).show()
+    }
+  }
+
+  private fun refreshInsigniaStatus() {
+    val hddFile = resolveHddFile()
+    val eepromFile = resolveEepromFile()
+    val setupUri = resolveInsigniaSetupAssistantUri()
+    val setupName = resolveInsigniaSetupAssistantName()
+    val setupReady = setupUri != null && hasPersistedReadPermission(setupUri)
+
+    tvInsigniaStatus.text = getString(R.string.settings_insignia_status_checking)
+
+    Thread {
+      var dashboardStatus: XboxInsigniaHelper.DashboardStatus? = null
+      var dashboardError: String? = null
+
+      if (hddFile != null) {
+        try {
+          dashboardStatus = XboxInsigniaHelper.inspectDashboard(hddFile)
+        } catch (error: Exception) {
+          dashboardError = error.message ?: error.javaClass.simpleName
+        }
+      }
+
+      val snapshot = InsigniaStatusSnapshot(
+        hasLocalHdd = hddFile != null,
+        hasEeprom = eepromFile.isFile,
+        dashboardStatus = dashboardStatus,
+        dashboardError = dashboardError,
+        setupAssistantName = setupName,
+        setupAssistantReady = setupReady,
+      )
+
+      runOnUiThread {
+        if (isFinishing || isDestroyed) {
+          return@runOnUiThread
+        }
+        tvInsigniaStatus.text = buildInsigniaStatusText(snapshot)
+      }
+    }.start()
+  }
+
+  private fun buildInsigniaStatusText(snapshot: InsigniaStatusSnapshot): String {
+    val dashboardLine = when {
+      !snapshot.hasLocalHdd ->
+        getString(R.string.settings_insignia_status_dashboard_unavailable)
+      snapshot.dashboardError != null ->
+        getString(R.string.settings_insignia_status_dashboard_error, snapshot.dashboardError)
+      snapshot.dashboardStatus?.looksRetailDashboardInstalled == true ->
+        getString(R.string.settings_insignia_status_dashboard_ready)
+      snapshot.dashboardStatus?.hasAnyRetailDashboardFiles == true ->
+        getString(R.string.settings_insignia_status_dashboard_partial)
+      else ->
+        getString(R.string.settings_insignia_status_dashboard_missing)
+    }
+
+    val eepromLine = if (snapshot.hasEeprom) {
+      getString(R.string.settings_insignia_status_eeprom_ready)
+    } else {
+      getString(R.string.settings_insignia_status_eeprom_missing)
+    }
+
+    val setupLine = when {
+      snapshot.setupAssistantReady ->
+        getString(
+          R.string.settings_insignia_status_setup_selected,
+          snapshot.setupAssistantName ?: getString(R.string.settings_insignia_setup_source_unknown),
+        )
+      snapshot.setupAssistantName != null ->
+        getString(R.string.settings_insignia_status_setup_inaccessible, snapshot.setupAssistantName)
+      else ->
+        getString(R.string.settings_insignia_status_setup_missing)
+    }
+
+    return listOf(
+      getString(
+        R.string.settings_insignia_status_dns,
+        XboxInsigniaHelper.PRIMARY_DNS,
+        XboxInsigniaHelper.SECONDARY_DNS,
+      ),
+      dashboardLine,
+      eepromLine,
+      setupLine,
+    ).joinToString("\n")
+  }
+
+  private fun prepareInsigniaNetworking() {
+    if (isPreparingInsignia || isInitializingHdd || isImportingDashboard) {
+      return
+    }
+
+    val hddFile = resolveHddFile()
+    if (hddFile == null) {
+      Toast.makeText(this, R.string.settings_insignia_prepare_no_hdd, Toast.LENGTH_LONG).show()
+      refreshInsigniaStatus()
+      return
+    }
+
+    val eepromFile = resolveEepromFile()
+    if (!eepromFile.isFile) {
+      Toast.makeText(this, R.string.settings_insignia_prepare_no_eeprom, Toast.LENGTH_LONG).show()
+      refreshInsigniaStatus()
+      return
+    }
+
+    switchNetworkEnable.isChecked = true
+    prefs.edit().putBoolean("setting_network_enable", true).apply()
+
+    isPreparingInsignia = true
+    Toast.makeText(this, R.string.settings_insignia_prepare_working, Toast.LENGTH_SHORT).show()
+
+    Thread {
+      val result = runCatching {
+        XboxInsigniaHelper.applyConfigSectorDns(hddFile)
+        XboxEepromEditor.applyXboxLiveDns(eepromFile, XboxInsigniaHelper.primaryDnsBytes())
+        runCatching { XboxInsigniaHelper.inspectDashboard(hddFile) }.getOrNull()
+      }
+
+      runOnUiThread {
+        isPreparingInsignia = false
+        if (isFinishing || isDestroyed) {
+          return@runOnUiThread
+        }
+
+        result.onSuccess { dashboardStatus ->
+          refreshInsigniaStatus()
+          val messageRes = if (dashboardStatus?.looksRetailDashboardInstalled == false) {
+            R.string.settings_insignia_prepare_success_missing_dashboard
+          } else {
+            R.string.settings_insignia_prepare_success
+          }
+          Toast.makeText(this, messageRes, Toast.LENGTH_LONG).show()
+        }.onFailure { error ->
+          Toast.makeText(
+            this,
+            getString(
+              R.string.settings_insignia_prepare_failed,
+              error.message ?: error.javaClass.simpleName,
+            ),
+            Toast.LENGTH_LONG,
+          ).show()
+          refreshInsigniaStatus()
+        }
+      }
+    }.start()
+  }
+
+  private fun showInsigniaSetupAssistantPrompt() {
+    val setupUri = resolveInsigniaSetupAssistantUri()
+    if (setupUri == null || !hasPersistedReadPermission(setupUri)) {
+      if (setupUri != null) {
+        prefs.edit()
+          .remove(PREF_INSIGNIA_SETUP_URI)
+          .remove(PREF_INSIGNIA_SETUP_NAME)
+          .apply()
+      }
+      refreshInsigniaStatus()
+      Toast.makeText(this, R.string.settings_insignia_register_pick_prompt, Toast.LENGTH_SHORT).show()
+      pickInsigniaSetupAssistant.launch(arrayOf("*/*"))
+      return
+    }
+
+    val setupName = resolveInsigniaSetupAssistantName()
+      ?: getString(R.string.settings_insignia_setup_source_unknown)
+    MaterialAlertDialogBuilder(this)
+      .setTitle(R.string.settings_insignia_register_title)
+      .setMessage(getString(R.string.settings_insignia_register_message, setupName))
+      .setPositiveButton(R.string.settings_insignia_register_boot_action) { _, _ ->
+        launchInsigniaSetupAssistant(setupUri)
+      }
+      .setNeutralButton(R.string.settings_insignia_register_choose_new) { _, _ ->
+        pickInsigniaSetupAssistant.launch(arrayOf("*/*"))
+      }
+      .setNegativeButton(android.R.string.cancel, null)
+      .show()
+  }
+
+  private fun launchInsigniaSetupAssistant(uri: Uri) {
+    persistUriPermission(uri)
+    switchNetworkEnable.isChecked = true
+    prefs.edit()
+      .putBoolean("setting_network_enable", true)
+      .putString("dvdUri", uri.toString())
+      .remove("dvdPath")
+      .putBoolean("skip_game_picker", false)
+      .commit()
+
+    startActivity(Intent(this, MainActivity::class.java))
+  }
+
+  private fun resolveInsigniaSetupAssistantUri(): Uri? {
+    return prefs.getString(PREF_INSIGNIA_SETUP_URI, null)?.let(Uri::parse)
+  }
+
+  private fun resolveInsigniaSetupAssistantName(): String? {
+    return prefs.getString(PREF_INSIGNIA_SETUP_NAME, null)
   }
 
   private fun setupEepromEditor() {
@@ -725,6 +1016,7 @@ class SettingsActivity : AppCompatActivity() {
       runOnUiThread {
         isInitializingHdd = false
         refreshHddToolsState(button)
+        refreshInsigniaStatus()
         result.onSuccess {
           Toast.makeText(this, R.string.settings_hdd_init_success, Toast.LENGTH_SHORT).show()
         }.onFailure { error ->
@@ -969,6 +1261,7 @@ class SettingsActivity : AppCompatActivity() {
         plan.workingDir.deleteRecursively()
         isImportingDashboard = false
         btnImportDashboard.isEnabled = true
+        refreshInsigniaStatus()
         result.onSuccess {
           val messageRes = when {
             plan.bootAliasCreated -> R.string.settings_dashboard_import_success_with_alias
@@ -1089,14 +1382,18 @@ class SettingsActivity : AppCompatActivity() {
     var current = root
 
     while (true) {
-      val children = current.listFiles()
-        ?.filterNot { shouldSkipDashboardSourceEntry(it.name) }
-        .orEmpty()
+      val children = dashboardSourceEntries(current)
       if (children.size != 1 || !children.first().isDirectory) {
-        return current
+        break
       }
       current = children.first()
     }
+
+    if (looksLikeDashboardSourceRoot(current)) {
+      return current
+    }
+
+    return findNestedDashboardSourceRoot(current) ?: current
   }
 
   private fun buildDashboardImportLayout(sourceRoot: File, workingDir: File): File {
@@ -1112,9 +1409,13 @@ class SettingsActivity : AppCompatActivity() {
     }
 
     val sourceC = entries.firstOrNull { it.isDirectory && it.name.equals("C", ignoreCase = true) }
+      ?.let(::normalizeDashboardPartitionRoot)
     val sourceE = entries.firstOrNull { it.isDirectory && it.name.equals("E", ignoreCase = true) }
-    val rootEntriesForC = entries.filterNot { entry ->
+      ?.let(::normalizeDashboardPartitionRoot)
+    val rootEntriesForC = if (sourceC == null) entries.filterNot { entry ->
       entry.isDirectory && (entry.name.equals("C", ignoreCase = true) || entry.name.equals("E", ignoreCase = true))
+    } else {
+      emptyList()
     }
 
     sourceC?.let { copyLocalDirectoryContents(it, File(layoutRoot, "C")) }
@@ -1128,6 +1429,27 @@ class SettingsActivity : AppCompatActivity() {
     sourceE?.let { copyLocalDirectoryContents(it, File(layoutRoot, "E")) }
 
     return layoutRoot
+  }
+
+  private fun normalizeDashboardPartitionRoot(partitionDir: File): File {
+    if (!partitionDir.isDirectory) {
+      return partitionDir
+    }
+
+    var current = partitionDir
+    while (true) {
+      if (looksLikeDashboardSourceRoot(current)) {
+        return current
+      }
+
+      val children = dashboardSourceEntries(current).filter { it.isDirectory }
+      if (children.size != 1) {
+        break
+      }
+      current = children.first()
+    }
+
+    return findNestedDashboardSourceRoot(current) ?: current
   }
 
   private fun copyLocalDirectoryContents(sourceDir: File, targetDir: File) {
@@ -1265,9 +1587,102 @@ class SettingsActivity : AppCompatActivity() {
   }
 
   private fun dashboardSourceHasFiles(root: File): Boolean {
-    return root.walkTopDown().any { file ->
-      file.isFile && !shouldSkipDashboardSourceEntry(file.name)
+    return looksLikeDashboardSourceRoot(root) || findNestedDashboardSourceRoot(root) != null
+  }
+
+  private fun dashboardSourceEntries(root: File): List<File> {
+    return root.listFiles()
+      ?.filterNot { shouldSkipDashboardSourceEntry(it.name) }
+      .orEmpty()
+  }
+
+  private fun looksLikeDashboardSourceRoot(root: File): Boolean {
+    val entries = dashboardSourceEntries(root)
+    if (entries.isEmpty()) {
+      return false
     }
+
+    val hasPartitionDir = entries.any { entry ->
+      entry.isDirectory &&
+        (entry.name.equals("C", ignoreCase = true) || entry.name.equals("E", ignoreCase = true)) &&
+        dashboardSourceEntries(entry).isNotEmpty()
+    }
+    if (hasPartitionDir) {
+      return true
+    }
+
+    return scoreDashboardSourceRoot(root, root) > 0
+  }
+
+  private fun findNestedDashboardSourceRoot(root: File): File? {
+    var bestDir: File? = null
+    var bestScore = Int.MIN_VALUE
+
+    root.walkTopDown()
+      .maxDepth(8)
+      .forEach { candidate ->
+        if (!candidate.isDirectory || candidate == root) {
+          return@forEach
+        }
+
+        val score = scoreDashboardSourceRoot(root, candidate)
+        if (score > bestScore) {
+          bestScore = score
+          bestDir = candidate
+        }
+      }
+
+    return bestDir?.takeIf { bestScore > 0 }
+  }
+
+  private fun scoreDashboardSourceRoot(searchRoot: File, candidate: File): Int {
+    val entries = dashboardSourceEntries(candidate)
+    if (entries.isEmpty()) {
+      return Int.MIN_VALUE
+    }
+
+    val partitionDirs = entries.filter { entry ->
+      entry.isDirectory &&
+        (entry.name.equals("C", ignoreCase = true) || entry.name.equals("E", ignoreCase = true)) &&
+        dashboardSourceEntries(entry).isNotEmpty()
+    }
+    val directFiles = entries.filter { it.isFile }
+    val directDirs = entries.filter { it.isDirectory }
+
+    var score = 0
+    if (partitionDirs.isNotEmpty()) {
+      score += 10_000
+    }
+    if (directFiles.any { it.name.equals("xboxdash.xbe", ignoreCase = true) }) {
+      score += 9_000
+    }
+    if (directFiles.any { it.name.equals("msdash.xbe", ignoreCase = true) }) {
+      score += 7_000
+    }
+    if (directFiles.any { it.name.equals("xbox.xtf", ignoreCase = true) }) {
+      score += 3_000
+    }
+    if (directDirs.any { it.name.equals("xodash", ignoreCase = true) }) {
+      score += 3_000
+    }
+    if (directDirs.any { it.name.equals("audio", ignoreCase = true) }) {
+      score += 1_500
+    }
+    if (directDirs.any { it.name.equals("fonts", ignoreCase = true) }) {
+      score += 1_500
+    }
+    if (directFiles.any { it.extension.equals("xbe", ignoreCase = true) }) {
+      score += 1_000
+    }
+
+    if (score <= 0) {
+      return score
+    }
+
+    val depth = candidate.relativeTo(searchRoot)
+      .invariantSeparatorsPath
+      .count { it == '/' } + 1
+    return score - (depth * 120)
   }
 
   private fun describeDashboardSource(root: File): String {
@@ -1297,6 +1712,12 @@ class SettingsActivity : AppCompatActivity() {
     try {
       contentResolver.takePersistableUriPermission(uri, flags)
     } catch (_: SecurityException) {
+    }
+  }
+
+  private fun hasPersistedReadPermission(uri: Uri): Boolean {
+    return contentResolver.persistedUriPermissions.any { permission ->
+      permission.isReadPermission && permission.uri == uri
     }
   }
 
