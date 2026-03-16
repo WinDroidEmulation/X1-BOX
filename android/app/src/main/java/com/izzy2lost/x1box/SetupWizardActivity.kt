@@ -152,6 +152,7 @@ class SetupWizardActivity : AppCompatActivity() {
 
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
+    OrientationLocker(this).enable()
 
     mcpxPath = loadValidatedLocalPath("mcpxPath", "mcpxUri", ::isSavedMcpxFileValid)
     flashPath = loadValidatedLocalPath("flashPath", "flashUri", ::isSavedFlashFileValid)

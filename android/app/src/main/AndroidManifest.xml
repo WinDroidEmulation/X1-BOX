@@ -11,7 +11,7 @@
 
     <activity
       android:name=".LauncherActivity"
-      android:screenOrientation="fullSensor"
+      android:screenOrientation="portrait"
       android:exported="true">
 
       <intent-filter>
@@ -35,7 +35,7 @@
 
     <activity
       android:name=".MainActivity"
-      android:screenOrientation="sensorLandscape"
+      android:screenOrientation="landscape"
       android:configChanges="keyboard|keyboardHidden|orientation|screenSize|screenLayout|smallestScreenSize|uiMode"
       android:hardwareAccelerated="true"
       android:process=":xemu"
@@ -48,17 +48,17 @@
 
     <activity
       android:name=".SetupWizardActivity"
-      android:screenOrientation="fullSensor"
+      android:screenOrientation="portrait"
       android:exported="false" />
 
     <activity
       android:name=".GameLibraryActivity"
-      android:screenOrientation="fullSensor"
+      android:screenOrientation="portrait"
       android:exported="false" />
 
     <activity
       android:name=".SettingsActivity"
-      android:screenOrientation="fullSensor"
+      android:screenOrientation="portrait"
       android:exported="false" />
 
   </application>

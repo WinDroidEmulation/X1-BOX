@@ -207,6 +207,7 @@ class SettingsActivity : AppCompatActivity() {
 
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
+    OrientationLocker(this).enable()
     setContentView(R.layout.activity_settings)
     EdgeToEdgeHelper.enable(this)
     EdgeToEdgeHelper.applySystemBarPadding(findViewById(R.id.settings_scroll))

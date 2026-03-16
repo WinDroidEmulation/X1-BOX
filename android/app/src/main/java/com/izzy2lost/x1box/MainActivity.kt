@@ -78,6 +78,7 @@ class MainActivity : SDLActivity(), InputManager.InputDeviceListener {
 
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
+    OrientationLocker(this, landscapeOnly = true).enable()
     window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
     val requestedSlot = intent?.getIntExtra(EXTRA_AUTO_LOAD_SNAPSHOT_SLOT, 0) ?: 0
     if (requestedSlot in 1..TOTAL_SNAPSHOT_SLOTS) {

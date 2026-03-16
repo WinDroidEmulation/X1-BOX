@@ -15,6 +15,7 @@ class LauncherActivity : Activity() {
 
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
+    OrientationLocker(this).enable()
 
     val prefs = getSharedPreferences("x1box_prefs", MODE_PRIVATE)
     var setupComplete = prefs.getBoolean("setup_complete", false)
