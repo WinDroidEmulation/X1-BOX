@@ -53,7 +53,11 @@ static void scatter_gather_rw(MCPXAPUState *d, hwaddr sge_base,
     unsigned int bytes_to_copy = TARGET_PAGE_SIZE - offset_in_page;
 
     while (len > 0) {
-        assert(page_entry <= max_sge);
+        if (page_entry > max_sge) {
+            fprintf(stderr, "scatter_gather_rw: page_entry %u exceeds max_sge %u,"
+                            " addr=0x%x\n", page_entry, max_sge, addr);
+            break;
+        }
 
         uint32_t prd_address = ldl_le_phys(&address_space_memory,
                                            sge_base + page_entry * 8 + 0);
@@ -66,7 +70,11 @@ static void scatter_gather_rw(MCPXAPUState *d, hwaddr sge_base,
             bytes_to_copy = len;
         }
 
-        assert(paddr + bytes_to_copy < memory_region_size(d->ram));
+        if (paddr + bytes_to_copy >= memory_region_size(d->ram)) {
+            fprintf(stderr, "scatter_gather_rw: paddr 0x%" HWADDR_PRIx
+                            " out of RAM bounds\n", paddr);
+            break;
+        }
 
         if (dir) {
             memcpy(&d->ram_ptr[paddr], ptr, bytes_to_copy);
