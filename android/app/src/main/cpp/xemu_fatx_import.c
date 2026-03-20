@@ -59,6 +59,7 @@ typedef struct XemuFatxCache {
     uint32_t entry_size;
     bool dirty;
     void *data;
+    size_t data_capacity;
 } XemuFatxCache;
 
 typedef struct XemuFatxFs {
@@ -375,11 +376,15 @@ static bool xemu_fatx_populate_fat_cache(XemuFatxFs *fs, uint32_t index)
         cache->dirty = false;
     }
 
-    g_free(cache->data);
     cache->position = index;
     cache->entries = MIN(XEMU_FATX_FAT_CACHE_NUM_ENTRIES, fs->fat_entry_count - index);
     cache->entry_size = fs->fat_type == XEMU_FATX_FAT_TYPE_16 ? 2 : 4;
-    cache->data = g_malloc(cache->entries * cache->entry_size);
+    size_t needed = (size_t)cache->entries * cache->entry_size;
+    if (needed > cache->data_capacity) {
+        g_free(cache->data);
+        cache->data = g_malloc(needed);
+        cache->data_capacity = needed;
+    }
 
     xemu_fatx_dev_seek(fs, fs->fat_offset +
                            (uint64_t)cache->position * cache->entry_size);

@@ -1776,7 +1776,7 @@ void sdl2_gl_refresh(DisplayChangeListener *dcl)
 #endif
 
 #ifdef __ANDROID__
-    const int64_t sleep_threshold = 500000;   // 0.5ms — Android CFS scheduler jitter is ~0.2ms
+    const int64_t sleep_threshold = 200000;   // 0.2ms — modern Android CFS jitter is <0.1ms
 #elif !defined(_WIN32)
     const int64_t sleep_threshold = 2000000;
 #else
@@ -1951,7 +1951,14 @@ static void *call_qemu_main(void *opaque)
 /* Note: only supports millisecond resolution on Windows */
 static void sleep_ns(int64_t ns)
 {
-#ifndef _WIN32
+#ifdef __ANDROID__
+        /* Use clock_nanosleep with relative time for better precision on Android.
+         * CLOCK_MONOTONIC avoids wall-clock adjustments during sleep. */
+        struct timespec sleep_delay;
+        sleep_delay.tv_sec = ns / 1000000000LL;
+        sleep_delay.tv_nsec = ns % 1000000000LL;
+        clock_nanosleep(CLOCK_MONOTONIC, 0, &sleep_delay, NULL);
+#elif !defined(_WIN32)
         struct timespec sleep_delay, rem_delay;
         sleep_delay.tv_sec = ns / 1000000000LL;
         sleep_delay.tv_nsec = ns % 1000000000LL;

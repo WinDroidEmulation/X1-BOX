@@ -42,12 +42,13 @@ android {
         arguments += listOf(
           "-DXEMU_ANDROID_BUILD_ID=3",
           "-DXEMU_ENABLE_XISO_CONVERTER=ON",
-          "-DCMAKE_C_FLAGS_DEBUG=-O2 -g0",
-          "-DCMAKE_CXX_FLAGS_DEBUG=-O2 -g0",
-          "-DCMAKE_C_FLAGS_RELWITHDEBINFO=-O3 -g0",
-          "-DCMAKE_CXX_FLAGS_RELWITHDEBINFO=-O3 -g0",
-          "-DCMAKE_C_FLAGS_RELEASE=-O3 -g0",
-          "-DCMAKE_CXX_FLAGS_RELEASE=-O3 -g0"
+          "-DCMAKE_C_FLAGS_DEBUG=-O2 -g0 -march=armv8-a+simd -fvisibility=hidden -ffunction-sections -fdata-sections",
+          "-DCMAKE_CXX_FLAGS_DEBUG=-O2 -g0 -march=armv8-a+simd -fvisibility=hidden -ffunction-sections -fdata-sections",
+          "-DCMAKE_C_FLAGS_RELWITHDEBINFO=-O3 -g0 -march=armv8-a+simd -fvisibility=hidden -ffunction-sections -fdata-sections",
+          "-DCMAKE_CXX_FLAGS_RELWITHDEBINFO=-O3 -g0 -march=armv8-a+simd -fvisibility=hidden -ffunction-sections -fdata-sections",
+          "-DCMAKE_C_FLAGS_RELEASE=-O3 -g0 -march=armv8-a+simd -fvisibility=hidden -ffunction-sections -fdata-sections",
+          "-DCMAKE_CXX_FLAGS_RELEASE=-O3 -g0 -march=armv8-a+simd -fvisibility=hidden -ffunction-sections -fdata-sections",
+          "-DCMAKE_SHARED_LINKER_FLAGS=-Wl,--gc-sections"
         )
         cppFlags += listOf("-std=c++17", "-fexceptions", "-frtti")
       }

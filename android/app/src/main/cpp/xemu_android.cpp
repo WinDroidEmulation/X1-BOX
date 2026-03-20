@@ -23,6 +23,7 @@
 #include <string>
 #include <vector>
 #include <sys/stat.h>
+#include <fcntl.h>
 #include <errno.h>
 #include <unistd.h>
 
@@ -144,18 +145,29 @@ static void AppendNativeDebugLog(const char* level, const char* message) {
 
   SDL_LockMutex(g_native_debug_log_mutex);
 
+  /* Use POSIX write() with O_APPEND instead of std::ofstream to avoid
+   * repeated file open/close overhead and C++ stream construction. */
   struct stat st {};
-  const bool should_truncate =
-      stat(g_native_debug_log_path.c_str(), &st) == 0 &&
-      st.st_size > kMaxDebugLogBytes;
+  if (stat(g_native_debug_log_path.c_str(), &st) == 0 &&
+      st.st_size > kMaxDebugLogBytes) {
+    /* Truncate oversized log file */
+    int tfd = open(g_native_debug_log_path.c_str(), O_WRONLY | O_TRUNC);
+    if (tfd >= 0) close(tfd);
+  }
 
-  std::ofstream out(
-      g_native_debug_log_path,
-      should_truncate ? (std::ios::out | std::ios::trunc)
-                      : (std::ios::out | std::ios::app));
-  if (out.is_open()) {
-    out << CurrentNativeLogTimestamp() << ' ' << level << '/' << kLogTag
-        << ": " << message << '\n';
+  int fd = open(g_native_debug_log_path.c_str(),
+                O_WRONLY | O_CREAT | O_APPEND, 0644);
+  if (fd >= 0) {
+    char buf[2048];
+    std::string ts = CurrentNativeLogTimestamp();
+    int len = snprintf(buf, sizeof(buf), "%s %s/%s: %s\n",
+                       ts.c_str(), level, kLogTag, message);
+    if (len > 0) {
+      size_t bytes_to_write =
+          (size_t)((len < (int)sizeof(buf) - 1) ? len : (int)sizeof(buf) - 1);
+      (void)write(fd, buf, bytes_to_write);
+    }
+    close(fd);
   }
 
   SDL_UnlockMutex(g_native_debug_log_mutex);

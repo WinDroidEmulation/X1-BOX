@@ -29,6 +29,9 @@
 
 #ifdef __ANDROID__
 #include <android/log.h>
+#ifdef __aarch64__
+#include <arm_neon.h>
+#endif
 
 static void android_log_gl_errors(const char *ctx)
 {
@@ -231,48 +234,116 @@ static void android_texture_convert_to_rgba8(const TextureShape s,
                 }
                 case NV097_SET_TEXTURE_FORMAT_COLOR_SZ_A8R8G8B8:
                 case NV097_SET_TEXTURE_FORMAT_COLOR_SZ_I8_A8R8G8B8:
-                case NV097_SET_TEXTURE_FORMAT_COLOR_LU_IMAGE_A8R8G8B8: {
-                    const uint8_t *pixel = src_row + x * 4;
-                    out[0] = pixel[2];
-                    out[1] = pixel[1];
-                    out[2] = pixel[0];
-                    out[3] = pixel[3];
-                    break;
-                }
+                case NV097_SET_TEXTURE_FORMAT_COLOR_LU_IMAGE_A8R8G8B8:
                 case NV097_SET_TEXTURE_FORMAT_COLOR_SZ_X8R8G8B8:
                 case NV097_SET_TEXTURE_FORMAT_COLOR_LU_IMAGE_X8R8G8B8: {
+                    bool preserve_alpha =
+                        (s.color_format != NV097_SET_TEXTURE_FORMAT_COLOR_SZ_X8R8G8B8 &&
+                         s.color_format != NV097_SET_TEXTURE_FORMAT_COLOR_LU_IMAGE_X8R8G8B8);
+#ifdef __aarch64__
+                    /* NEON BGRA→RGBA shuffle: process 4 pixels (16 bytes) at a time */
+                    static const uint8_t perm_arr[16] =
+                        {2,1,0,3, 6,5,4,7, 10,9,8,11, 14,13,12,15};
+                    uint8x16_t vperm = vld1q_u8(perm_arr);
+                    static const uint8_t alpha_mask_arr[16] =
+                        {0,0,0,0xFF, 0,0,0,0xFF, 0,0,0,0xFF, 0,0,0,0xFF};
+                    uint8x16_t valpha_mask = preserve_alpha
+                        ? vdupq_n_u8(0)
+                        : vld1q_u8(alpha_mask_arr);
+                    unsigned int remaining = width - x;
+                    const uint8_t *sp = src_row + x * 4;
+                    uint8_t *dp = out;
+                    while (remaining >= 4) {
+                        uint8x16_t v = vqtbl1q_u8(vld1q_u8(sp), vperm);
+                        vst1q_u8(dp, vorrq_u8(v, valpha_mask));
+                        sp += 16; dp += 16; remaining -= 4;
+                    }
+                    while (remaining-- > 0) {
+                        dp[0] = sp[2]; dp[1] = sp[1];
+                        dp[2] = sp[0]; dp[3] = preserve_alpha ? sp[3] : 0xFF;
+                        sp += 4; dp += 4;
+                    }
+                    x = width; /* skip remaining scalar iterations */
+#else
                     const uint8_t *pixel = src_row + x * 4;
                     out[0] = pixel[2];
                     out[1] = pixel[1];
                     out[2] = pixel[0];
-                    out[3] = 0xFF;
+                    out[3] = preserve_alpha ? pixel[3] : 0xFF;
+#endif
                     break;
                 }
                 case NV097_SET_TEXTURE_FORMAT_COLOR_SZ_B8G8R8A8:
                 case NV097_SET_TEXTURE_FORMAT_COLOR_LU_IMAGE_B8G8R8A8: {
+#ifdef __aarch64__
+                    /* NEON B8G8R8A8→RGBA8: rotate bytes within each pixel */
+                    static const uint8_t perm_arr[16] =
+                        {1,2,3,0, 5,6,7,4, 9,10,11,8, 13,14,15,12};
+                    uint8x16_t vperm = vld1q_u8(perm_arr);
+                    unsigned int remaining = width - x;
+                    const uint8_t *sp = src_row + x * 4;
+                    uint8_t *dp = out;
+                    while (remaining >= 4) {
+                        vst1q_u8(dp, vqtbl1q_u8(vld1q_u8(sp), vperm));
+                        sp += 16; dp += 16; remaining -= 4;
+                    }
+                    while (remaining-- > 0) {
+                        dp[0] = sp[1]; dp[1] = sp[2];
+                        dp[2] = sp[3]; dp[3] = sp[0];
+                        sp += 4; dp += 4;
+                    }
+                    x = width;
+#else
                     const uint8_t *pixel = src_row + x * 4;
                     out[0] = pixel[1];
                     out[1] = pixel[2];
                     out[2] = pixel[3];
                     out[3] = pixel[0];
+#endif
                     break;
                 }
                 case NV097_SET_TEXTURE_FORMAT_COLOR_SZ_A8B8G8R8:
                 case NV097_SET_TEXTURE_FORMAT_COLOR_LU_IMAGE_A8B8G8R8: {
+#ifdef __aarch64__
+                    /* A8B8G8R8 is already RGBA8 — bulk memcpy */
+                    memcpy(out, src_row + x * 4, (width - x) * 4);
+                    x = width;
+#else
                     const uint8_t *pixel = src_row + x * 4;
                     out[0] = pixel[0];
                     out[1] = pixel[1];
                     out[2] = pixel[2];
                     out[3] = pixel[3];
+#endif
                     break;
                 }
                 case NV097_SET_TEXTURE_FORMAT_COLOR_SZ_R8G8B8A8:
                 case NV097_SET_TEXTURE_FORMAT_COLOR_LU_IMAGE_R8G8B8A8: {
+#ifdef __aarch64__
+                    /* NEON R8G8B8A8→RGBA8: full byte reverse per pixel */
+                    static const uint8_t perm_arr[16] =
+                        {3,2,1,0, 7,6,5,4, 11,10,9,8, 15,14,13,12};
+                    uint8x16_t vperm = vld1q_u8(perm_arr);
+                    unsigned int remaining = width - x;
+                    const uint8_t *sp = src_row + x * 4;
+                    uint8_t *dp = out;
+                    while (remaining >= 4) {
+                        vst1q_u8(dp, vqtbl1q_u8(vld1q_u8(sp), vperm));
+                        sp += 16; dp += 16; remaining -= 4;
+                    }
+                    while (remaining-- > 0) {
+                        dp[0] = sp[3]; dp[1] = sp[2];
+                        dp[2] = sp[1]; dp[3] = sp[0];
+                        sp += 4; dp += 4;
+                    }
+                    x = width;
+#else
                     const uint8_t *pixel = src_row + x * 4;
                     out[0] = pixel[3];
                     out[1] = pixel[2];
                     out[2] = pixel[1];
                     out[3] = pixel[0];
+#endif
                     break;
                 }
                 case NV097_SET_TEXTURE_FORMAT_COLOR_LU_IMAGE_G8B8:
@@ -300,7 +371,8 @@ static void android_texture_convert_to_rgba8(const TextureShape s,
     }
 }
 
-static void android_prepare_tex_upload(const TextureShape s,
+static void android_prepare_tex_upload(PGRAPHGLState *r,
+                                       const TextureShape s,
                                        const uint8_t *src,
                                        unsigned int width,
                                        unsigned int height,
@@ -310,11 +382,9 @@ static void android_prepare_tex_upload(const TextureShape s,
                                        GLint *ifmt,
                                        GLenum *fmt,
                                        GLenum *type,
-                                       const uint8_t **upload_data,
-                                       uint8_t **upload_tmp)
+                                       const uint8_t **upload_data)
 {
     *upload_data = src;
-    *upload_tmp = NULL;
     *ifmt = kelvin_color_format_gl_map[s.color_format].gl_internal_format;
     *fmt = kelvin_color_format_gl_map[s.color_format].gl_format;
     *type = kelvin_color_format_gl_map[s.color_format].gl_type;
@@ -323,10 +393,16 @@ static void android_prepare_tex_upload(const TextureShape s,
         return;
     }
 
-    *upload_tmp = g_malloc(width * height * depth * 4);
+    size_t needed = (size_t)width * height * depth * 4;
+    if (needed > r->android_tex_conv_buf_size) {
+        g_free(r->android_tex_conv_buf);
+        r->android_tex_conv_buf = g_malloc(needed);
+        r->android_tex_conv_buf_size = needed;
+    }
     android_texture_convert_to_rgba8(s, src, width, height, depth,
-                                     row_pitch, slice_pitch, *upload_tmp);
-    *upload_data = *upload_tmp;
+                                     row_pitch, slice_pitch,
+                                     r->android_tex_conv_buf);
+    *upload_data = r->android_tex_conv_buf;
     *ifmt = GL_RGBA8;
     *fmt = GL_RGBA;
     *type = GL_UNSIGNED_BYTE;
@@ -383,7 +459,7 @@ static void pgraph_gl_log_invalid_texture_range(NV2AState *d,
 #endif
 }
 
-static TextureBinding* generate_texture(const TextureShape s, const uint8_t *texture_data, const uint8_t *palette_data);
+static TextureBinding* generate_texture(PGRAPHGLState *r, const TextureShape s, const uint8_t *texture_data, const uint8_t *palette_data);
 static void texture_binding_destroy(gpointer data);
 
 struct pgraph_texture_possibly_dirty_struct {
@@ -810,7 +886,7 @@ void pgraph_gl_bind_textures(NV2AState *d)
 
         if (key_out->binding == NULL) {
             // Must create the texture
-            key_out->binding = generate_texture(state, texture_data, palette_data);
+            key_out->binding = generate_texture(r, state, texture_data, palette_data);
             key_out->binding->data_hash = tex_data_hash;
             key_out->binding->scale = 1;
 #ifdef __ANDROID__
@@ -894,11 +970,13 @@ gl_internal_format_to_s3tc_enum(GLint gl_internal_format)
     }
 }
 
-static void upload_gl_texture(GLenum gl_target,
+static void upload_gl_texture(PGRAPHGLState *r,
+                              GLenum gl_target,
                               const TextureShape s,
                               const uint8_t *texture_data,
                               const uint8_t *palette_data)
 {
+    (void)r; /* used only in Android-specific paths */
     ColorFormatInfo f = kelvin_color_format_gl_map[s.color_format];
     nv2a_profile_inc_counter(NV2A_PROF_TEX_UPLOAD);
 #ifdef __ANDROID__
@@ -935,7 +1013,6 @@ static void upload_gl_texture(GLenum gl_target,
             {
                 const uint8_t *pixel_data = converted ? converted : texture_data;
                 const uint8_t *upload_data = pixel_data;
-                uint8_t *upload_tmp = NULL;
                 unsigned int source_bpp =
 #ifdef __ANDROID__
                     android_texture_source_bpp(s, f.bytes_per_pixel,
@@ -949,11 +1026,11 @@ static void upload_gl_texture(GLenum gl_target,
                 GLint  tex_ifmt = f.gl_internal_format;
                 GLenum tex_type = f.gl_type;
 #ifdef __ANDROID__
-                android_prepare_tex_upload(s, pixel_data, adjusted_width,
+                android_prepare_tex_upload(r, s, pixel_data, adjusted_width,
                                            adjusted_height, 1, row_pitch,
                                            row_pitch * adjusted_height,
                                            &tex_ifmt, &tex_fmt, &tex_type,
-                                           &upload_data, &upload_tmp);
+                                           &upload_data);
 #endif
                 glPixelStorei(GL_UNPACK_ROW_LENGTH,
                               upload_data == texture_data ?
@@ -963,9 +1040,6 @@ static void upload_gl_texture(GLenum gl_target,
                              tex_fmt, tex_type,
                              upload_data);
                 glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
-#ifdef __ANDROID__
-                g_free(upload_tmp);
-#endif
             }
 
             if (converted) {
@@ -1000,8 +1074,10 @@ static void upload_gl_texture(GLenum gl_target,
                     texture_data, width, height);
                 unsigned int tex_width = width;
                 unsigned int tex_height = height;
+                bool need_cubemap_border_strip =
+                    s.cubemap && adjusted_width != s.width;
 
-                if (s.cubemap && adjusted_width != s.width) {
+                if (need_cubemap_border_strip) {
                     // FIXME: Consider preserving the border.
                     // There does not seem to be a way to reference the border
                     // texels in a cubemap, so they are discarded.
@@ -1019,7 +1095,7 @@ static void upload_gl_texture(GLenum gl_target,
                 glTexImage2D(gl_target, level, GL_RGBA8, tex_width, tex_height,
                              0, GL_RGBA, GL_UNSIGNED_BYTE, converted);
                 g_free(converted);
-                if (s.cubemap && adjusted_width != s.width) {
+                if (need_cubemap_border_strip) {
                     glPixelStorei(GL_UNPACK_SKIP_PIXELS, 0);
                     glPixelStorei(GL_UNPACK_SKIP_ROWS, 0);
                     if (physical_width == width) {
@@ -1059,16 +1135,15 @@ static void upload_gl_texture(GLenum gl_target,
 
                 {
                     const uint8_t *upload_data = pixel_data;
-                    uint8_t *upload_tmp = NULL;
                     GLenum tex_fmt = f.gl_format;
                     GLint  tex_ifmt = f.gl_internal_format;
                     GLenum tex_type = f.gl_type;
 #ifdef __ANDROID__
-                    android_prepare_tex_upload(s, pixel_data, tex_width,
+                    android_prepare_tex_upload(r, s, pixel_data, tex_width,
                                                tex_height, 1, row_pitch,
                                                row_pitch * tex_height,
                                                &tex_ifmt, &tex_fmt, &tex_type,
-                                               &upload_data, &upload_tmp);
+                                               &upload_data);
 #endif
                     glPixelStorei(GL_UNPACK_ROW_LENGTH,
                                   upload_data == pixel_data &&
@@ -1078,9 +1153,6 @@ static void upload_gl_texture(GLenum gl_target,
                                  tex_height, 0, tex_fmt, tex_type,
                                  upload_data);
                     glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
-#ifdef __ANDROID__
-                    g_free(upload_tmp);
-#endif
                 }
                 if (converted) {
                     g_free(converted);
@@ -1153,7 +1225,6 @@ static void upload_gl_texture(GLenum gl_target,
                 {
                     const uint8_t *pixel_data = converted ? converted : unswizzled;
                     const uint8_t *upload_data = pixel_data;
-                    uint8_t *upload_tmp = NULL;
                     unsigned int source_bpp =
 #ifdef __ANDROID__
                         android_texture_source_bpp(s, f.bytes_per_pixel,
@@ -1167,19 +1238,16 @@ static void upload_gl_texture(GLenum gl_target,
                     GLint  tex_ifmt = f.gl_internal_format;
                     GLenum tex_type = f.gl_type;
 #ifdef __ANDROID__
-                    android_prepare_tex_upload(s, pixel_data, width, height,
+                    android_prepare_tex_upload(r, s, pixel_data, width, height,
                                                depth, upload_row_pitch,
                                                upload_slice_pitch, &tex_ifmt,
                                                &tex_fmt, &tex_type,
-                                               &upload_data, &upload_tmp);
+                                               &upload_data);
 #endif
                     glTexImage3D(gl_target, level, tex_ifmt,
                                  width, height, depth, 0,
                                  tex_fmt, tex_type,
                                  upload_data);
-#ifdef __ANDROID__
-                    g_free(upload_tmp);
-#endif
                 }
 
                 if (converted) {
@@ -1205,7 +1273,8 @@ static void upload_gl_texture(GLenum gl_target,
 #endif
 }
 
-static TextureBinding* generate_texture(const TextureShape s,
+static TextureBinding* generate_texture(PGRAPHGLState *r,
+                                        const TextureShape s,
                                         const uint8_t *texture_data,
                                         const uint8_t *palette_data)
 {
@@ -1282,20 +1351,20 @@ static TextureBinding* generate_texture(const TextureShape s,
 
         length = (length + NV2A_CUBEMAP_FACE_ALIGNMENT - 1) & ~(NV2A_CUBEMAP_FACE_ALIGNMENT - 1);
 
-        upload_gl_texture(GL_TEXTURE_CUBE_MAP_POSITIVE_X,
+        upload_gl_texture(r, GL_TEXTURE_CUBE_MAP_POSITIVE_X,
                           s, texture_data + 0 * length, palette_data);
-        upload_gl_texture(GL_TEXTURE_CUBE_MAP_NEGATIVE_X,
+        upload_gl_texture(r, GL_TEXTURE_CUBE_MAP_NEGATIVE_X,
                           s, texture_data + 1 * length, palette_data);
-        upload_gl_texture(GL_TEXTURE_CUBE_MAP_POSITIVE_Y,
+        upload_gl_texture(r, GL_TEXTURE_CUBE_MAP_POSITIVE_Y,
                           s, texture_data + 2 * length, palette_data);
-        upload_gl_texture(GL_TEXTURE_CUBE_MAP_NEGATIVE_Y,
+        upload_gl_texture(r, GL_TEXTURE_CUBE_MAP_NEGATIVE_Y,
                           s, texture_data + 3 * length, palette_data);
-        upload_gl_texture(GL_TEXTURE_CUBE_MAP_POSITIVE_Z,
+        upload_gl_texture(r, GL_TEXTURE_CUBE_MAP_POSITIVE_Z,
                           s, texture_data + 4 * length, palette_data);
-        upload_gl_texture(GL_TEXTURE_CUBE_MAP_NEGATIVE_Z,
+        upload_gl_texture(r, GL_TEXTURE_CUBE_MAP_NEGATIVE_Z,
                           s, texture_data + 5 * length, palette_data);
     } else {
-        upload_gl_texture(gl_target, s, texture_data, palette_data);
+        upload_gl_texture(r, gl_target, s, texture_data, palette_data);
     }
 
     /* Linear textures don't support mipmapping */
@@ -1415,4 +1484,9 @@ void pgraph_gl_finalize_textures(PGRAPHState *pg)
     free(r->texture_cache_entries);
 
     r->texture_cache_entries = NULL;
+#ifdef __ANDROID__
+    g_free(r->android_tex_conv_buf);
+    r->android_tex_conv_buf = NULL;
+    r->android_tex_conv_buf_size = 0;
+#endif
 }

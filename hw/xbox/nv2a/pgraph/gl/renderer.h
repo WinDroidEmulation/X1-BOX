@@ -203,6 +203,8 @@ typedef struct PGRAPHGLState {
     size_t   android_conv_buf_size;
     uint8_t *android_s2t_conv_buf;   /* render-to-texture conversion */
     size_t   android_s2t_conv_buf_size;
+    uint8_t *android_tex_conv_buf;   /* texture upload conversion */
+    size_t   android_tex_conv_buf_size;
 #endif
 
     TextureBinding *texture_binding[NV2A_MAX_TEXTURES];
