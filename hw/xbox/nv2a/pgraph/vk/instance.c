@@ -384,6 +384,163 @@ static bool check_device_support_required_extensions(VkPhysicalDevice device)
     return true;
 }
 
+static void report_device_incompatibility(VkPhysicalDevice device,
+                                          const char *reason)
+{
+    VkPhysicalDeviceProperties props;
+    vkGetPhysicalDeviceProperties(device, &props);
+
+    fprintf(stderr, "Vulkan device rejected (%s): %s\n", props.deviceName,
+            reason);
+#ifdef __ANDROID__
+    __android_log_print(ANDROID_LOG_WARN, "xemu-android",
+                        "Vulkan device rejected (%s): %s", props.deviceName,
+                        reason);
+#endif
+}
+
+static bool format_already_checked(const VkFormat *formats, size_t count,
+                                   VkFormat format)
+{
+    for (size_t i = 0; i < count; i++) {
+        if (formats[i] == format) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+static bool check_format_supports_features(VkPhysicalDevice device,
+                                           VkFormat format,
+                                           VkFormatFeatureFlags features)
+{
+    VkFormatProperties props;
+    vkGetPhysicalDeviceFormatProperties(device, format, &props);
+
+    return (props.optimalTilingFeatures & features) == features;
+}
+
+static bool check_image_format_usage_supported(VkPhysicalDevice device,
+                                               VkFormat format,
+                                               VkImageUsageFlags usage)
+{
+    VkPhysicalDeviceImageFormatInfo2 info = {
+        .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_IMAGE_FORMAT_INFO_2,
+        .format = format,
+        .type = VK_IMAGE_TYPE_2D,
+        .tiling = VK_IMAGE_TILING_OPTIMAL,
+        .usage = usage,
+    };
+    VkImageFormatProperties2 props = {
+        .sType = VK_STRUCTURE_TYPE_IMAGE_FORMAT_PROPERTIES_2,
+    };
+
+    return vkGetPhysicalDeviceImageFormatProperties2(device, &info, &props) ==
+           VK_SUCCESS;
+}
+
+static bool check_texture_formats_supported(VkPhysicalDevice device)
+{
+    VkFormat checked_formats[ARRAY_SIZE(kelvin_color_format_vk_map)];
+    size_t num_checked_formats = 0;
+    const VkImageUsageFlags usage =
+        VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+
+    memset(checked_formats, 0, sizeof(checked_formats));
+
+    for (int i = 0; i < ARRAY_SIZE(kelvin_color_format_vk_map); i++) {
+        VkFormat format = kelvin_color_format_vk_map[i].vk_format;
+
+        if (format == VK_FORMAT_UNDEFINED ||
+            format_already_checked(checked_formats, num_checked_formats,
+                                   format)) {
+            continue;
+        }
+
+        checked_formats[num_checked_formats++] = format;
+
+        if (!check_format_supports_features(device, format,
+                                            VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT) ||
+            !check_image_format_usage_supported(device, format, usage)) {
+            char reason[160];
+
+            snprintf(reason, sizeof(reason),
+                     "sampled texture uploads need VkFormat %d to support "
+                     "optimal sampled images and transfer-dst usage",
+                     format);
+            report_device_incompatibility(device, reason);
+            return false;
+        }
+    }
+
+    return true;
+}
+
+static bool check_surface_format_supported(VkPhysicalDevice device,
+                                           const SurfaceFormatInfo *format)
+{
+    VkImageUsageFlags usage = VK_IMAGE_USAGE_SAMPLED_BIT |
+                              VK_IMAGE_USAGE_TRANSFER_DST_BIT |
+                              VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
+                              format->usage;
+
+    return check_image_format_usage_supported(device, format->vk_format, usage) &&
+           check_format_supports_features(device, format->vk_format,
+                                          VK_FORMAT_FEATURE_BLIT_SRC_BIT |
+                                          VK_FORMAT_FEATURE_BLIT_DST_BIT);
+}
+
+static bool check_surface_formats_supported(VkPhysicalDevice device)
+{
+    VkFormat checked_formats[ARRAY_SIZE(kelvin_surface_color_format_vk_map)];
+    size_t num_checked_formats = 0;
+
+    memset(checked_formats, 0, sizeof(checked_formats));
+
+    for (int i = 0; i < ARRAY_SIZE(kelvin_surface_color_format_vk_map); i++) {
+        const SurfaceFormatInfo *format = &kelvin_surface_color_format_vk_map[i];
+
+        if (!format->host_bytes_per_pixel ||
+            format_already_checked(checked_formats, num_checked_formats,
+                                   format->vk_format)) {
+            continue;
+        }
+
+        checked_formats[num_checked_formats++] = format->vk_format;
+
+        if (!check_surface_format_supported(device, format)) {
+            char reason[192];
+
+            snprintf(reason, sizeof(reason),
+                     "surface format VkFormat %d needs sampled, transfer, "
+                     "attachment, and blit support",
+                     format->vk_format);
+            report_device_incompatibility(device, reason);
+            return false;
+        }
+    }
+
+    if (!check_surface_format_supported(device, &zeta_d16)) {
+        report_device_incompatibility(
+            device,
+            "Z16 surfaces need sampled, transfer, attachment, and blit support");
+        return false;
+    }
+
+    if (!check_surface_format_supported(device, &zeta_d24_unorm_s8_uint) &&
+        !check_surface_format_supported(device, &zeta_d32_sfloat_s8_uint)) {
+        report_device_incompatibility(
+            device,
+            "Z24S8 surfaces need either D24_UNORM_S8_UINT or "
+            "D32_SFLOAT_S8_UINT with sampled, transfer, attachment, and blit "
+            "support");
+        return false;
+    }
+
+    return true;
+}
+
 static bool is_device_compatible(VkPhysicalDevice device)
 {
     VkPhysicalDeviceProperties props;
@@ -395,8 +552,9 @@ static bool is_device_compatible(VkPhysicalDevice device)
     QueueFamilyIndices indices = pgraph_vk_find_queue_families(device);
 
     return is_queue_family_indicies_complete(indices) &&
-           check_device_support_required_extensions(device);
-    // FIXME: Check formats
+           check_device_support_required_extensions(device) &&
+           check_texture_formats_supported(device) &&
+           check_surface_formats_supported(device);
     // FIXME: Check vram
 }
 

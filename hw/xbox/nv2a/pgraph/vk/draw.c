@@ -22,6 +22,9 @@
 #include "renderer.h"
 #include "hw/xbox/nv2a/pgraph/prim_rewrite.h"
 #include <math.h>
+#ifdef __aarch64__
+#include <arm_neon.h>
+#endif
 #ifdef __ANDROID__
 #include <SDL.h>
 #include <android/log.h>
@@ -2032,6 +2035,63 @@ static VertexBufferRemap remap_unaligned_attributes(PGRAPHState *pg,
     return remap;
 }
 
+#ifdef __aarch64__
+static inline bool copy_remapped_attribute_arm64(uint8_t *dst,
+                                                 const uint8_t *src,
+                                                 VkDeviceSize old_stride,
+                                                 VkDeviceSize new_stride,
+                                                 uint32_t num_vertices)
+{
+    switch (new_stride) {
+    case 4:
+        for (uint32_t vertex_id = 0; vertex_id < num_vertices; vertex_id++) {
+            uint32_t word;
+
+            memcpy(&word, src, sizeof(word));
+            memcpy(dst, &word, sizeof(word));
+
+            dst += new_stride;
+            src += old_stride;
+        }
+        return true;
+
+    case 8:
+        for (uint32_t vertex_id = 0; vertex_id < num_vertices; vertex_id++) {
+            vst1_u8(dst, vld1_u8(src));
+
+            dst += new_stride;
+            src += old_stride;
+        }
+        return true;
+
+    case 12:
+        for (uint32_t vertex_id = 0; vertex_id < num_vertices; vertex_id++) {
+            uint32_t tail_word;
+
+            vst1_u8(dst, vld1_u8(src));
+            memcpy(&tail_word, src + 8, sizeof(tail_word));
+            memcpy(dst + 8, &tail_word, sizeof(tail_word));
+
+            dst += new_stride;
+            src += old_stride;
+        }
+        return true;
+
+    case 16:
+        for (uint32_t vertex_id = 0; vertex_id < num_vertices; vertex_id++) {
+            vst1q_u8(dst, vld1q_u8(src));
+
+            dst += new_stride;
+            src += old_stride;
+        }
+        return true;
+
+    default:
+        return false;
+    }
+}
+#endif
+
 static void copy_remapped_attributes_to_inline_buffer(PGRAPHState *pg,
                                                       VertexBufferRemap remap,
                                                       uint32_t start_vertex,
@@ -2065,6 +2125,16 @@ static void copy_remapped_attributes_to_inline_buffer(PGRAPHState *pg,
 
         uint8_t *out_ptr = buffer->mapped + attr_buffer_offset;
         uint8_t *in_ptr = d->vram_ptr + r->vertex_attribute_offsets[attr_id];
+
+#ifdef __aarch64__
+        if (copy_remapped_attribute_arm64(out_ptr, in_ptr,
+                                          remap.map[attr_id].old_stride,
+                                          remap.map[attr_id].new_stride,
+                                          num_vertices)) {
+            r->vertex_attribute_offsets[attr_id] = attr_buffer_offset;
+            continue;
+        }
+#endif
 
         for (int vertex_id = 0; vertex_id < num_vertices; vertex_id++) {
             memcpy(out_ptr, in_ptr, remap.map[attr_id].new_stride);
