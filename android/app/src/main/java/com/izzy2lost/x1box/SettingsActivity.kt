@@ -249,7 +249,6 @@ class SettingsActivity : AppCompatActivity() {
     val btn2x             = findViewById<MaterialButton>(R.id.btn_scale_2x)
     val btn3x             = findViewById<MaterialButton>(R.id.btn_scale_3x)
     val toggleDisplayMode = findViewById<MaterialButtonToggleGroup>(R.id.toggle_display_mode)
-    val toggleFrameRate   = findViewById<MaterialButtonToggleGroup>(R.id.toggle_frame_rate)
     val toggleSystemMemory = findViewById<MaterialButtonToggleGroup>(R.id.toggle_system_memory)
     val toggleThread      = findViewById<MaterialButtonToggleGroup>(R.id.toggle_tcg_thread)
     val btnMulti          = findViewById<MaterialButton>(R.id.btn_thread_multi)
@@ -323,10 +322,8 @@ class SettingsActivity : AppCompatActivity() {
       else -> toggleDisplayMode.check(R.id.btn_display_stretch)
     }
 
-    val frameRateLimit = prefs.getInt("setting_frame_rate_limit", 60)
-    when (frameRateLimit) {
-      30   -> toggleFrameRate.check(R.id.btn_fps_30)
-      else -> toggleFrameRate.check(R.id.btn_fps_60)
+    if (prefs.getInt("setting_frame_rate_limit", 60) != 60) {
+      prefs.edit().putInt("setting_frame_rate_limit", 60).apply()
     }
 
     val systemMemoryMiB = prefs.getInt("setting_system_memory_mib", 64)
@@ -432,11 +429,6 @@ class SettingsActivity : AppCompatActivity() {
         R.id.btn_scale_3x -> 3
         else              -> 1
       }
-      val selectedFrameRate = when (toggleFrameRate.checkedButtonId) {
-        R.id.btn_fps_30 -> 30
-        R.id.btn_fps_60 -> 60
-        else            -> 60
-      }
       val selectedThread = when (toggleThread.checkedButtonId) {
         R.id.btn_thread_single -> "single"
         else                   -> "multi"
@@ -464,7 +456,7 @@ class SettingsActivity : AppCompatActivity() {
       val edit = prefs.edit()
         .putInt("setting_display_mode", selectedDisplayMode)
         .putInt("setting_surface_scale", selectedScale)
-        .putInt("setting_frame_rate_limit", selectedFrameRate)
+        .putInt("setting_frame_rate_limit", 60)
         .putInt("setting_system_memory_mib", selectedSystemMemoryMiB)
         .putString("setting_tcg_thread", selectedThread)
         .putBoolean("setting_use_dsp", switchDsp.isChecked)

@@ -226,7 +226,7 @@ static void xemu_android_refresh_frame_limit_from_env(void)
         }
     }
 
-    if (fps != 30 && fps != 60) {
+    if (fps != 60) {
         fps = 60;
     }
 

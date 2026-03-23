@@ -1024,7 +1024,6 @@ cleanup:
 
 struct EmulatorSettings {
   int surface_scale    = 1;           // 1, 2, or 3
-  int frame_rate_limit = 60;          // 30 or 60
   int system_memory_mib = 64;         // 64 or 128
   std::string tcg_thread = "multi";   // "single" or "multi"
   std::string renderer = "opengl";    // "vulkan" or "opengl"
@@ -1117,13 +1116,7 @@ static bool WriteConfigToml(const std::string& config_path,
   perf->insert_or_assign("hard_fpu", settings.hard_fpu);
   android->insert_or_assign("tcg_thread",
     (settings.tcg_thread == "single") ? "single" : "multi");
-  {
-    int frame_rate_limit = settings.frame_rate_limit;
-    if (frame_rate_limit != 30 && frame_rate_limit != 60) {
-      frame_rate_limit = 60;
-    }
-    android->insert_or_assign("frame_rate_limit", frame_rate_limit);
-  }
+  android->insert_or_assign("frame_rate_limit", 60);
   if (!audio_vp->contains("num_workers")) {
     audio_vp->insert_or_assign("num_workers", 0);
   }
@@ -1264,12 +1257,6 @@ static SetupFiles SyncSetupFiles() {
 
   EmulatorSettings emuSettings;
   emuSettings.surface_scale  = GetPrefInt(env, activity, "setting_surface_scale", 1);
-  emuSettings.frame_rate_limit =
-      GetPrefInt(env, activity, "setting_frame_rate_limit", 60);
-  if (emuSettings.frame_rate_limit != 30 &&
-      emuSettings.frame_rate_limit != 60) {
-    emuSettings.frame_rate_limit = 60;
-  }
   emuSettings.system_memory_mib =
       GetPrefInt(env, activity, "setting_system_memory_mib", 64);
   if (emuSettings.system_memory_mib != 64 &&
