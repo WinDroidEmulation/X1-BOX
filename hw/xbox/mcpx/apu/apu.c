@@ -407,12 +407,9 @@ static void monitor_init(MCPXAPUState *d)
     int fifo_frames = 3;
     int audio_samples = 512;
 #ifdef __ANDROID__
-    /* Keep Android closer to the desktop callback size now that voice
-     * resampling is handled by libsamplerate instead of the old stub. The
-     * FIFO still provides extra headroom for short scheduling stalls.
-     */
-    fifo_frames = 16;
-    audio_samples = 512;
+    /* Give Android more audio headroom to ride out scheduling stalls. */
+    fifo_frames = 24;
+    audio_samples = 2048;
     fifo_frames = getenv_int_clamped("XEMU_ANDROID_AUDIO_FIFO_FRAMES", 3, 32,
                                      fifo_frames);
     audio_samples = getenv_int_clamped("XEMU_ANDROID_AUDIO_SAMPLES", 256, 4096,
@@ -467,12 +464,8 @@ static void monitor_init(MCPXAPUState *d)
     d->monitor.fifo_capacity_bytes = fifo_capacity_bytes;
     d->monitor.device_buffer_bytes = device_buffer_bytes;
 #ifdef __ANDROID__
-    /* Keep the Android queue short enough to avoid noticeable drift/latency,
-     * but still allow about two callback drains of headroom for scheduler
-     * jitter before backpressuring the APU.
-     */
-    d->monitor.queued_bytes_high = MIN(2 * drain_bytes, max_high);
-    d->monitor.queued_bytes_low = 0;
+    d->monitor.queued_bytes_high = MIN(3 * drain_bytes, max_high);
+    d->monitor.queued_bytes_low = MIN(drain_bytes, d->monitor.queued_bytes_high);
 #else
     d->monitor.queued_bytes_high = MIN(3 * drain_bytes, max_high);
     d->monitor.queued_bytes_low = MIN(drain_bytes, d->monitor.queued_bytes_high);

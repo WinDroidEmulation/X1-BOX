@@ -72,25 +72,19 @@ static void pgraph_vk_init(NV2AState *d, Error **errp)
 #ifdef __ANDROID__
     if (!use_external_memory) {
         __android_log_print(ANDROID_LOG_WARN, "xemu-android",
-                            "pgraph_vk_init: external memory interop unavailable, falling back to OpenGL");
+                            "pgraph_vk_init: external memory interop unavailable, using CPU display downloads");
         if (g_gl_context) {
             glo_context_destroy(g_gl_context);
             g_gl_context = NULL;
         }
-        error_setg(errp,
-                   "Vulkan display interop unavailable on this device");
-        return;
+    } else {
+        __android_log_print(ANDROID_LOG_INFO, "xemu-android",
+                            "pgraph_vk_init: external memory interop=enabled");
     }
-    __android_log_print(ANDROID_LOG_INFO, "xemu-android",
-                        "pgraph_vk_init: external memory interop=%s",
-                        use_external_memory ? "enabled" : "disabled");
 #endif
 #elif defined(__ANDROID__)
-    __android_log_print(ANDROID_LOG_WARN, "xemu-android",
-                        "pgraph_vk_init: Vulkan external-memory interop not built, falling back to OpenGL");
-    error_setg(errp,
-               "Vulkan display interop unavailable in this build");
-    return;
+    __android_log_print(ANDROID_LOG_INFO, "xemu-android",
+                        "pgraph_vk_init: using CPU display downloads (external memory interop disabled at build time)");
 #endif
 
     pg->vk_renderer_state = (PGRAPHVkState *)g_malloc0(sizeof(PGRAPHVkState));

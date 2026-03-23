@@ -107,6 +107,19 @@ static void LogErrorFmt(const char* fmt, const char* detail) {
   AppendNativeDebugLog("E", buffer);
 }
 
+static const char* RendererName(CONFIG_DISPLAY_RENDERER renderer) {
+  switch (renderer) {
+    case CONFIG_DISPLAY_RENDERER_OPENGL:
+      return "OpenGL";
+    case CONFIG_DISPLAY_RENDERER_VULKAN:
+      return "Vulkan";
+    case CONFIG_DISPLAY_RENDERER_NULL:
+      return "Null";
+    default:
+      return "Unknown";
+  }
+}
+
 static int g_next_dvd_fdset_id = 9000;
 
 static bool EnsureDirExists(const std::string& path) {
@@ -1279,7 +1292,9 @@ static SetupFiles SyncSetupFiles() {
   }
   {
     std::string rendererPref = GetPrefString(env, activity, "setting_renderer");
-    if (rendererPref == "opengl") {
+    if (rendererPref == "vulkan") {
+      emuSettings.renderer = "vulkan";
+    } else if (rendererPref == "opengl") {
       emuSettings.renderer = "opengl";
     }
   }
@@ -1367,9 +1382,11 @@ extern "C" int xemu_android_main(int argc, char** argv) {
     LogError("xemu_android_main: qemu_init re-entry detected; stale :xemu process reuse");
     return 1;
   }
+  struct ResetInitGuard {
+    ~ResetInitGuard() { g_qemu_init_started.store(false); }
+  } reset_init_guard;
   if (!qemu_main) {
     LogError("xemu core not linked; qemu_main missing");
-    g_qemu_init_started.store(false);
     return 1;
   }
   LogInfo("xemu_android_main: qemu_init");
@@ -1481,8 +1498,7 @@ extern "C" int SDL_main(int argc, char* argv[]) {
     LogInfoInt("Config final show_welcome=%d", g_config.general.show_welcome ? 1 : 0);
     LogInfoInt("Config final cache_shaders=%d", g_config.perf.cache_shaders ? 1 : 0);
     LogInfoFmt("Config final renderer=%s",
-               (g_config.display.renderer == 0) ? "Vulkan" :
-               (g_config.display.renderer == 1) ? "OpenGL" : "Null");
+               RendererName(g_config.display.renderer));
     LogInfoFmt("Config final bootrom=%s", g_config.sys.files.bootrom_path ? g_config.sys.files.bootrom_path : "(null)");
     LogInfoFmt("Config final flashrom=%s", g_config.sys.files.flashrom_path ? g_config.sys.files.flashrom_path : "(null)");
     LogInfoFmt("Config final hdd=%s", g_config.sys.files.hdd_path ? g_config.sys.files.hdd_path : "(null)");

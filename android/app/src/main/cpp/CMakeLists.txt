@@ -16,6 +16,29 @@ endif()
 
 option(XEMU_ENABLE_VULKAN "Enable Vulkan renderer" ON)
 option(XEMU_ENABLE_XISO_CONVERTER "Enable ISO->XISO converter library" ON)
+option(XEMU_ENABLE_LTO "Enable LTO for Android release native builds" OFF)
+
+set(XEMU_LTO_ENABLED FALSE)
+set(XEMU_RELEASE_LIKE_BUILD FALSE)
+if(CMAKE_BUILD_TYPE MATCHES "^(Release|RelWithDebInfo|MinSizeRel)$")
+  set(XEMU_RELEASE_LIKE_BUILD TRUE)
+endif()
+
+if(XEMU_ENABLE_LTO AND XEMU_RELEASE_LIKE_BUILD)
+  if(CMAKE_C_COMPILER_ID MATCHES "Clang" AND CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    set(XEMU_LTO_ENABLED TRUE)
+    add_compile_options(
+      "$<$<COMPILE_LANGUAGE:C>:-flto>"
+      "$<$<COMPILE_LANGUAGE:CXX>:-flto>"
+    )
+    add_link_options(-flto)
+    message(STATUS "LTO enabled for Android native targets")
+  else()
+    message(WARNING "XEMU_ENABLE_LTO is ON, but the active C/C++ compilers do not support the Android LTO flow; skipping LTO")
+  endif()
+elseif(XEMU_ENABLE_LTO)
+  message(STATUS "LTO requested, but skipped for non-release build type: ${CMAKE_BUILD_TYPE}")
+endif()
 
 find_program(CARGO_EXECUTABLE NAMES cargo cargo.exe)
 if(CARGO_EXECUTABLE MATCHES "-NOTFOUND$" OR NOT CARGO_EXECUTABLE)
@@ -359,6 +382,11 @@ if(XEMU_XISO_CONVERTER_BUILD_ENABLED)
       "RUSTUP_TOOLCHAIN=${XISO_CONVERTER_RUSTUP_TOOLCHAIN}"
     )
   endif()
+  if(XEMU_LTO_ENABLED)
+    list(APPEND XISO_CONVERTER_CARGO_ENV_VARS
+      "CARGO_PROFILE_RELEASE_LTO=fat"
+    )
+  endif()
 
   set(XISO_CONVERTER_RS_DIR "${REPO_ROOT}/android/rust/xiso_converter")
   set(XISO_CONVERTER_RS_TARGET "aarch64-linux-android")
@@ -446,6 +474,13 @@ file(WRITE "${GLIB_CROSS_FILE}"
 "cpp_link_args = ['--target=${ANDROID_TRIPLE}', '-L${ICONV_STUB_DIR}', '-liconv']\n"
 )
 
+set(GLIB_MESON_LTO_OPTIONS "")
+if(XEMU_LTO_ENABLED)
+  list(APPEND GLIB_MESON_LTO_OPTIONS
+    -Db_lto=true
+  )
+endif()
+
 ExternalProject_Add(glib_ep
   URL "https://download.gnome.org/sources/glib/2.66/glib-${GLIB_VERSION}.tar.xz"
   URL_HASH "SHA256=97BC87DD91365589AF5CBBFEA2574833AEA7A1B71840FD365ECD2852C76B9C8B"
@@ -469,6 +504,7 @@ ExternalProject_Add(glib_ep
     -Dnls=disabled
     -Dinternal_pcre=true
     -Dinstalled_tests=false
+    ${GLIB_MESON_LTO_OPTIONS}
   BUILD_COMMAND "${NINJA_EXECUTABLE}" -C "${GLIB_BUILD_DIR}" -j 1
   INSTALL_COMMAND "${MESON_EXECUTABLE}" install -C "${GLIB_BUILD_DIR}"
   BUILD_BYPRODUCTS

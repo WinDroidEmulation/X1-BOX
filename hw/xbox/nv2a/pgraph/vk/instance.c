@@ -65,16 +65,6 @@ static char const *const validation_layers[] = {
     "VK_LAYER_KHRONOS_validation",
 };
 
-static char const *const required_device_extensions[] = {
-#ifdef WIN32
-    VK_KHR_EXTERNAL_MEMORY_WIN32_EXTENSION_NAME,
-    VK_KHR_EXTERNAL_SEMAPHORE_WIN32_EXTENSION_NAME,
-#else
-    VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME,
-    VK_KHR_EXTERNAL_SEMAPHORE_FD_EXTENSION_NAME,
-#endif
-};
-
 static VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback(
     VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
     VkDebugUtilsMessageTypeFlagsEXT messageType,
@@ -342,12 +332,23 @@ get_available_device_extensions(VkPhysicalDevice device)
 
 static StringArray *get_required_device_extension_names(void)
 {
-    StringArray *extensions =
-        g_array_sized_new(FALSE, FALSE, sizeof(char *),
-                          ARRAY_SIZE(required_device_extensions));
+    StringArray *extensions = g_array_sized_new(FALSE, FALSE, sizeof(char *), 2);
 
+#ifdef WIN32
+    static char const *const required_device_extensions[] = {
+        VK_KHR_EXTERNAL_MEMORY_WIN32_EXTENSION_NAME,
+        VK_KHR_EXTERNAL_SEMAPHORE_WIN32_EXTENSION_NAME,
+    };
     g_array_append_vals(extensions, required_device_extensions,
                         ARRAY_SIZE(required_device_extensions));
+#elif HAVE_EXTERNAL_MEMORY
+    static char const *const required_device_extensions[] = {
+        VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME,
+        VK_KHR_EXTERNAL_SEMAPHORE_FD_EXTENSION_NAME,
+    };
+    g_array_append_vals(extensions, required_device_extensions,
+                        ARRAY_SIZE(required_device_extensions));
+#endif
 
     return extensions;
 }
@@ -372,7 +373,24 @@ static bool check_device_support_required_extensions(VkPhysicalDevice device)
     g_autoptr(VkExtensionPropertiesArray) available_extensions =
         get_available_device_extensions(device);
 
-    for (int i = 0; i < ARRAY_SIZE(required_device_extensions); i++) {
+#if !(defined(WIN32) || HAVE_EXTERNAL_MEMORY)
+    return true;
+#else
+#ifdef WIN32
+    static char const *const required_device_extensions[] = {
+        VK_KHR_EXTERNAL_MEMORY_WIN32_EXTENSION_NAME,
+        VK_KHR_EXTERNAL_SEMAPHORE_WIN32_EXTENSION_NAME,
+    };
+#else
+    static char const *const required_device_extensions[] = {
+        VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME,
+        VK_KHR_EXTERNAL_SEMAPHORE_FD_EXTENSION_NAME,
+    };
+#endif
+    const int required_device_extensions_len =
+        ARRAY_SIZE(required_device_extensions);
+
+    for (int i = 0; i < required_device_extensions_len; i++) {
         if (!is_extension_available(available_extensions,
                                     required_device_extensions[i])) {
             fprintf(stderr, "required device extension not found: %s\n",
@@ -380,6 +398,7 @@ static bool check_device_support_required_extensions(VkPhysicalDevice device)
             return false;
         }
     }
+#endif
 
     return true;
 }
@@ -551,10 +570,15 @@ static bool is_device_compatible(VkPhysicalDevice device)
 
     QueueFamilyIndices indices = pgraph_vk_find_queue_families(device);
 
+#ifdef __ANDROID__
+    return is_queue_family_indicies_complete(indices) &&
+           check_device_support_required_extensions(device);
+#else
     return is_queue_family_indicies_complete(indices) &&
            check_device_support_required_extensions(device) &&
            check_texture_formats_supported(device) &&
            check_surface_formats_supported(device);
+#endif
     // FIXME: Check vram
 }
 
@@ -606,8 +630,17 @@ static bool select_physical_device(PGRAPHState *pg, Error **errp)
         }
     }
     if (r->physical_device == VK_NULL_HANDLE) {
+#ifdef __ANDROID__
+        int fallback_index = preferred_device_index >= 0 ? preferred_device_index : 0;
+        r->physical_device = devices[fallback_index];
+        vkGetPhysicalDeviceProperties(r->physical_device, &r->device_props);
+        fprintf(stderr,
+                "Warning: No fully compatible Vulkan GPU found; trying %s anyway\n",
+                r->device_props.deviceName);
+#else
         error_setg(errp, "Failed to find a suitable GPU");
         return false;
+#endif
     }
 
     vkGetPhysicalDeviceProperties(r->physical_device, &r->device_props);
@@ -686,7 +719,7 @@ static bool create_logical_device(PGRAPHState *pg, Error **errp)
         }
         F(depthClamp, false),
         F(fillModeNonSolid, false),
-        F(geometryShader, true),
+        F(geometryShader, false),
         F(occlusionQueryPrecise, false),
         F(samplerAnisotropy, false),
         F(shaderClipDistance, false),

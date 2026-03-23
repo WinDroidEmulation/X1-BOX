@@ -42,13 +42,12 @@ android {
         arguments += listOf(
           "-DXEMU_ANDROID_BUILD_ID=3",
           "-DXEMU_ENABLE_XISO_CONVERTER=ON",
-          "-DCMAKE_C_FLAGS_DEBUG=-O2 -g0 -march=armv8-a+simd -fvisibility=hidden -ffunction-sections -fdata-sections",
-          "-DCMAKE_CXX_FLAGS_DEBUG=-O2 -g0 -march=armv8-a+simd -fvisibility=hidden -ffunction-sections -fdata-sections",
-          "-DCMAKE_C_FLAGS_RELWITHDEBINFO=-O3 -g0 -march=armv8-a+simd -fvisibility=hidden -ffunction-sections -fdata-sections",
-          "-DCMAKE_CXX_FLAGS_RELWITHDEBINFO=-O3 -g0 -march=armv8-a+simd -fvisibility=hidden -ffunction-sections -fdata-sections",
-          "-DCMAKE_C_FLAGS_RELEASE=-O3 -g0 -march=armv8-a+simd -fvisibility=hidden -ffunction-sections -fdata-sections",
-          "-DCMAKE_CXX_FLAGS_RELEASE=-O3 -g0 -march=armv8-a+simd -fvisibility=hidden -ffunction-sections -fdata-sections",
-          "-DCMAKE_SHARED_LINKER_FLAGS=-Wl,--gc-sections"
+          "-DCMAKE_C_FLAGS_DEBUG=-O2 -g0",
+          "-DCMAKE_CXX_FLAGS_DEBUG=-O2 -g0",
+          "-DCMAKE_C_FLAGS_RELWITHDEBINFO=-O2 -g0 -fvisibility=hidden",
+          "-DCMAKE_CXX_FLAGS_RELWITHDEBINFO=-O2 -g0 -fvisibility=hidden",
+          "-DCMAKE_C_FLAGS_RELEASE=-O2 -g0 -fvisibility=hidden",
+          "-DCMAKE_CXX_FLAGS_RELEASE=-O2 -g0 -fvisibility=hidden",
         )
         cppFlags += listOf("-std=c++17", "-fexceptions", "-frtti")
       }
@@ -73,6 +72,11 @@ android {
       }
     }
     release {
+      externalNativeBuild {
+        cmake {
+          arguments += listOf("-DXEMU_ENABLE_LTO=ON")
+        }
+      }
       isMinifyEnabled = false
       proguardFiles(
         getDefaultProguardFile("proguard-android-optimize.txt"),
@@ -112,7 +116,7 @@ dependencies {
   implementation("androidx.constraintlayout:constraintlayout:2.1.4")
   implementation("androidx.documentfile:documentfile:1.0.1")
   implementation("io.coil-kt:coil:2.7.0")
-  implementation("com.google.android.material:material:1.14.0-alpha07")
+  implementation("com.google.android.material:material:1.12.0")
 }
 
 kotlin {

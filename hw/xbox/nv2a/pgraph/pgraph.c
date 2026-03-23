@@ -403,6 +403,7 @@ static bool attempt_renderer_init(PGRAPHState *pg)
 static void init_renderer(PGRAPHState *pg)
 {
     CONFIG_DISPLAY_RENDERER original_renderer = g_config.display.renderer;
+
     CONFIG_DISPLAY_RENDERER default_renderer = get_default_renderer();
     CONFIG_DISPLAY_RENDERER attempts[CONFIG_DISPLAY_RENDERER__COUNT];
     int attempt_count = 0;
@@ -429,8 +430,9 @@ static void init_renderer(PGRAPHState *pg)
         g_config.display.renderer = attempts[i];
         if (attempt_renderer_init(pg)) {
             if (attempts[i] != original_renderer) {
-                g_autofree gchar *msg = g_strdup_printf(
-                    "Switched renderer to %s", pg->renderer->name);
+                g_autofree gchar *msg =
+                    g_strdup_printf("Switched renderer to %s",
+                                    pg->renderer->name);
                 xemu_queue_notification(msg);
             }
             return;

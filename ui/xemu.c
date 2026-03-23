@@ -1766,13 +1766,8 @@ void sdl2_gl_refresh(DisplayChangeListener *dcl)
     static int64_t last_update = 0;
 #ifdef __ANDROID__
     const int64_t frame_interval = g_android_frame_interval_ns;
-    const int64_t sleep_threshold = 200000;   // 0.2ms, tuned for Android scheduler jitter
-#elif !defined(_WIN32)
-    const int64_t frame_interval = 16666666;
-    const int64_t sleep_threshold = 2000000;
 #else
     const int64_t frame_interval = 16666666;
-    const int64_t sleep_threshold = 250000;
 #endif
     if (last_update == 0) {
 #ifdef __ANDROID__
@@ -1783,38 +1778,45 @@ void sdl2_gl_refresh(DisplayChangeListener *dcl)
     }
     int64_t deadline = last_update + frame_interval;
 
+#ifdef __ANDROID__
+    /* Sleep directly to the deadline — no spin threshold. Let the kernel
+     * wake us as close to the target as it can. Burning CPU on a spin
+     * loop steals cycles from APU/emulation threads and the "right"
+     * threshold varies wildly across Android devices anyway.
+     */
+    int64_t now = android_monotonic_time_ns();
+    if (now < deadline) {
+        android_sleep_until_ns(deadline);
+        now = android_monotonic_time_ns();
+    }
+    if (now - deadline > frame_interval) {
+        last_update = now;
+    } else {
+        last_update = deadline;
+    }
+#else
+    const int64_t sleep_threshold =
+#ifndef _WIN32
+        2000000;
+#else
+        250000;
+#endif
+
 #ifdef DEBUG_XEMU_C
     int64_t sleep_acc = 0;
     int64_t spin_acc = 0;
 #endif
 
     while (1) {
-#ifdef __ANDROID__
-        int64_t now = android_monotonic_time_ns();
-#else
         int64_t now = qemu_clock_get_ns(QEMU_CLOCK_REALTIME);
-#endif
         int64_t time_remaining = deadline - now;
         if (now < deadline) {
             if (time_remaining > sleep_threshold) {
-                // Try to sleep until the until reaching the sleep threshold.
-#ifdef __ANDROID__
-                android_sleep_until_ns(deadline - sleep_threshold);
-#else
                 sleep_ns(time_remaining - sleep_threshold);
-#endif
 #ifdef DEBUG_XEMU_C
-                sleep_acc +=
-#ifdef __ANDROID__
-                    android_monotonic_time_ns() - now;
-#else
-                    qemu_clock_get_ns(QEMU_CLOCK_REALTIME) - now;
-#endif
+                sleep_acc += qemu_clock_get_ns(QEMU_CLOCK_REALTIME) - now;
 #endif
             } else {
-                // Simply spin to avoid extra delays incurred with swapping to
-                // another process and back in the event of being within
-                // threshold to desired event.
 #ifdef DEBUG_XEMU_C
                 spin_acc++;
 #endif
@@ -1829,6 +1831,7 @@ void sdl2_gl_refresh(DisplayChangeListener *dcl)
             break;
         }
     }
+#endif
 
 }
 
