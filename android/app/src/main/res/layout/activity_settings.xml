@@ -836,6 +836,31 @@
             android:layout_marginBottom="8dp"
             android:text="@string/settings_clear_debug_log_action" />
 
+          <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:layout_marginBottom="10dp"
+            android:text="@string/settings_emulator_files_hint"
+            android:textAppearance="@style/TextAppearance.Material3.BodySmall"
+            android:textColor="@color/xemu_text_muted" />
+
+          <com.google.android.material.button.MaterialButton
+            android:id="@+id/btn_import_emulator_files"
+            style="@style/Widget.Xemu.Button.Outlined.Pill"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="8dp"
+            android:text="@string/settings_import_emulator_files_action" />
+
+          <com.google.android.material.button.MaterialButton
+            android:id="@+id/btn_export_emulator_files"
+            style="@style/Widget.Xemu.Button.Outlined.Pill"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="8dp"
+            android:text="@string/settings_export_emulator_files_action" />
+
           <com.google.android.material.button.MaterialButton
             android:id="@+id/btn_clear_system_cache"
             style="@style/Widget.Xemu.Button.Outlined.Pill"

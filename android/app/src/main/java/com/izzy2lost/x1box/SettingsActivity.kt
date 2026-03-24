@@ -20,6 +20,7 @@ import com.google.android.material.button.MaterialButtonToggleGroup
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.materialswitch.MaterialSwitch
 import com.google.android.material.textfield.TextInputLayout
+import java.io.BufferedOutputStream
 import java.io.BufferedInputStream
 import java.io.File
 import java.io.FileOutputStream
@@ -27,7 +28,10 @@ import java.io.IOException
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.zip.Deflater
+import java.util.zip.ZipEntry
 import java.util.zip.ZipInputStream
+import java.util.zip.ZipOutputStream
 
 class SettingsActivity : AppCompatActivity() {
   companion object {
@@ -43,6 +47,15 @@ class SettingsActivity : AppCompatActivity() {
     private const val INSIGNIA_SIGN_UP_URL = "https://insignia.live/"
     private const val INSIGNIA_GUIDE_URL = "https://insignia.live/guide/connect"
     private const val VULKAN_DRIVER_FILE_NAME = "vulkan_driver.so"
+    private const val MANAGED_FILES_ARCHIVE_PREFIX = "x1box-files-"
+    private val MANAGED_EMULATOR_FILE_ORDER = listOf(
+      "mcpx.bin",
+      "flash.bin",
+      "eeprom.bin",
+      "hdd.img",
+      "xemu.toml",
+    )
+    private val MANAGED_EMULATOR_FILE_NAMES = MANAGED_EMULATOR_FILE_ORDER.toSet()
   }
 
   private val prefs by lazy { getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE) }
@@ -163,8 +176,12 @@ class SettingsActivity : AppCompatActivity() {
   private var clearVulkan = false
   private var isInitializingHdd = false
   private var isImportingDashboard = false
+  private var isImportingEmulatorFiles = false
+  private var isExportingEmulatorFiles = false
   private var isPreparingInsignia = false
 
+  private lateinit var btnImportEmulatorFiles: MaterialButton
+  private lateinit var btnExportEmulatorFiles: MaterialButton
   private lateinit var switchDebugLogs: MaterialSwitch
   private lateinit var switchNetworkEnable: MaterialSwitch
   private lateinit var tvVulkanDriverName: TextView
@@ -258,6 +275,32 @@ class SettingsActivity : AppCompatActivity() {
       exportDebugLog(uri)
     }
 
+  private val importEmulatorFilesZip =
+    registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
+      uri ?: return@registerForActivityResult
+      persistUriPermission(uri)
+      if (!isZipSelection(uri)) {
+        Toast.makeText(this, R.string.settings_import_emulator_files_pick_zip_error, Toast.LENGTH_LONG).show()
+        return@registerForActivityResult
+      }
+      importManagedFilesFromZip(uri)
+    }
+
+  private val importEmulatorFilesDocuments =
+    registerForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris: List<Uri> ->
+      if (uris.isEmpty()) {
+        return@registerForActivityResult
+      }
+      uris.forEach(::persistUriPermission)
+      importManagedFilesFromDocuments(uris)
+    }
+
+  private val exportEmulatorFilesDocument =
+    registerForActivityResult(ActivityResultContracts.CreateDocument("application/zip")) { uri: Uri? ->
+      uri ?: return@registerForActivityResult
+      exportManagedFiles(uri)
+    }
+
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
     OrientationLocker(this).enable()
@@ -291,6 +334,8 @@ class SettingsActivity : AppCompatActivity() {
     val btnClearCache     = findViewById<MaterialButton>(R.id.btn_clear_system_cache)
     val btnExportDebugLog = findViewById<MaterialButton>(R.id.btn_export_debug_log)
     val btnClearDebugLog  = findViewById<MaterialButton>(R.id.btn_clear_debug_log)
+    btnImportEmulatorFiles = findViewById(R.id.btn_import_emulator_files)
+    btnExportEmulatorFiles = findViewById(R.id.btn_export_emulator_files)
     val btnInitializeRetailHdd = findViewById<MaterialButton>(R.id.btn_initialize_retail_hdd)
     switchNetworkEnable  = findViewById(R.id.switch_network_enable)
     tvInsigniaStatus     = findViewById(R.id.tv_insignia_status)
@@ -319,6 +364,8 @@ class SettingsActivity : AppCompatActivity() {
     switchEeprom480p = findViewById(R.id.switch_eeprom_480p)
     switchEeprom720p = findViewById(R.id.switch_eeprom_720p)
     switchEeprom1080i = findViewById(R.id.switch_eeprom_1080i)
+
+    updateEmulatorFilesActionState()
 
     // Load current values
     val renderer = prefs.getString("setting_renderer", "opengl") ?: "opengl"
@@ -543,6 +590,22 @@ class SettingsActivity : AppCompatActivity() {
       DebugLog.resetLogs(this)
       Toast.makeText(this, R.string.settings_clear_debug_log_success, Toast.LENGTH_SHORT).show()
     }
+    btnImportEmulatorFiles.setOnClickListener {
+      if (isImportingEmulatorFiles || isExportingEmulatorFiles) {
+        return@setOnClickListener
+      }
+      showManagedFilesImportWarning()
+    }
+    btnExportEmulatorFiles.setOnClickListener {
+      if (isImportingEmulatorFiles || isExportingEmulatorFiles) {
+        return@setOnClickListener
+      }
+      if (!hasAnyManagedFilesToExport()) {
+        Toast.makeText(this, R.string.settings_export_emulator_files_empty, Toast.LENGTH_LONG).show()
+        return@setOnClickListener
+      }
+      exportEmulatorFilesDocument.launch(defaultManagedFilesArchiveName())
+    }
 
     btnInitializeRetailHdd.setOnClickListener {
       showInitializeHddLayoutPicker(btnInitializeRetailHdd)
@@ -611,12 +674,20 @@ class SettingsActivity : AppCompatActivity() {
     )
   }
 
-  private fun copyUriToFile(uri: Uri, target: File) {
+  private fun copyUriToFile(
+    uri: Uri,
+    target: File,
+    openError: String = "Failed to open the selected file.",
+  ) {
+    val parent = target.parentFile
+    if (parent != null && !parent.exists() && !parent.mkdirs()) {
+      throw IOException("Failed to prepare ${parent.absolutePath}.")
+    }
     contentResolver.openInputStream(uri)?.use { input ->
       FileOutputStream(target).use { output ->
         input.copyTo(output)
       }
-    } ?: throw IOException("Failed to open the selected Vulkan driver.")
+    } ?: throw IOException(openError)
   }
 
   private fun extractVulkanDriverZipToFile(uri: Uri, target: File) {
@@ -737,6 +808,515 @@ class SettingsActivity : AppCompatActivity() {
   private fun resolveCustomVulkanDriverFile(): File {
     val base = getExternalFilesDir(null) ?: filesDir
     return File(File(base, "x1box"), VULKAN_DRIVER_FILE_NAME)
+  }
+
+  private fun updateEmulatorFilesActionState() {
+    if (!::btnImportEmulatorFiles.isInitialized || !::btnExportEmulatorFiles.isInitialized) {
+      return
+    }
+    val enabled = !isImportingEmulatorFiles && !isExportingEmulatorFiles
+    btnImportEmulatorFiles.isEnabled = enabled
+    btnExportEmulatorFiles.isEnabled = enabled
+  }
+
+  private fun showManagedFilesImportWarning() {
+    MaterialAlertDialogBuilder(this, R.style.ThemeOverlay_Xemu_RoundedDialog)
+      .setTitle(R.string.settings_import_emulator_files_action)
+      .setMessage(R.string.settings_import_emulator_files_message)
+      .setPositiveButton(R.string.settings_import_emulator_files_continue) { _, _ ->
+        showManagedFilesImportSourcePicker()
+      }
+      .setNegativeButton(android.R.string.cancel, null)
+      .show()
+  }
+
+  private fun showManagedFilesImportSourcePicker() {
+    val labels = arrayOf(
+      getString(R.string.settings_import_emulator_files_source_zip),
+      getString(R.string.settings_import_emulator_files_source_files),
+    )
+    val dp = resources.displayMetrics.density
+    lateinit var importDialog: androidx.appcompat.app.AlertDialog
+
+    val buttonList = LinearLayout(this).apply {
+      orientation = LinearLayout.VERTICAL
+      setPadding((20 * dp).toInt(), (12 * dp).toInt(), (20 * dp).toInt(), 0)
+      labels.forEachIndexed { index, label ->
+        addView(
+          MaterialButton(
+            this@SettingsActivity,
+            null,
+            com.google.android.material.R.attr.materialButtonOutlinedStyle
+          ).apply {
+            text = label
+            layoutParams = LinearLayout.LayoutParams(
+              LinearLayout.LayoutParams.MATCH_PARENT,
+              LinearLayout.LayoutParams.WRAP_CONTENT,
+            ).also { lp ->
+              lp.bottomMargin = (8 * dp).toInt()
+            }
+            setOnClickListener {
+              importDialog.dismiss()
+              when (index) {
+                0 -> importEmulatorFilesZip.launch(arrayOf("application/zip", "application/octet-stream"))
+                else -> importEmulatorFilesDocuments.launch(arrayOf("*/*"))
+              }
+            }
+          }
+        )
+      }
+    }
+
+    importDialog = MaterialAlertDialogBuilder(this, R.style.ThemeOverlay_Xemu_RoundedDialog)
+      .setTitle(R.string.settings_import_emulator_files_source_title)
+      .setView(buttonList)
+      .setNegativeButton(android.R.string.cancel, null)
+      .create()
+    importDialog.show()
+  }
+
+  private fun defaultManagedFilesArchiveName(): String {
+    val stamp = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date())
+    return "$MANAGED_FILES_ARCHIVE_PREFIX$stamp.zip"
+  }
+
+  private fun hasAnyManagedFilesToExport(): Boolean {
+    return MANAGED_EMULATOR_FILE_ORDER.any { resolveManagedExportSource(it)?.isFile == true }
+  }
+
+  private fun exportManagedFiles(uri: Uri) {
+    if (isImportingEmulatorFiles || isExportingEmulatorFiles) {
+      return
+    }
+
+    val filesToExport = resolveManagedFilesForExport()
+    if (filesToExport.isEmpty()) {
+      Toast.makeText(this, R.string.settings_export_emulator_files_empty, Toast.LENGTH_LONG).show()
+      return
+    }
+
+    isExportingEmulatorFiles = true
+    updateEmulatorFilesActionState()
+    Toast.makeText(this, R.string.settings_export_emulator_files_working, Toast.LENGTH_SHORT).show()
+
+    Thread {
+      val result = runCatching {
+        exportManagedFilesInternal(uri, filesToExport)
+      }
+
+      runOnUiThread {
+        isExportingEmulatorFiles = false
+        updateEmulatorFilesActionState()
+        result.onSuccess { exportedNames ->
+          Toast.makeText(
+            this,
+            getString(R.string.settings_export_emulator_files_success, exportedNames.size),
+            Toast.LENGTH_LONG,
+          ).show()
+        }.onFailure { error ->
+          Toast.makeText(
+            this,
+            getString(
+              R.string.settings_export_emulator_files_failed,
+              error.message ?: getString(R.string.settings_import_emulator_files_unknown_error),
+            ),
+            Toast.LENGTH_LONG,
+          ).show()
+        }
+      }
+    }.start()
+  }
+
+  private fun exportManagedFilesInternal(
+    uri: Uri,
+    filesToExport: List<Pair<String, File>>,
+  ): List<String> {
+    contentResolver.openOutputStream(uri, "w")?.use { rawOutput ->
+      ZipOutputStream(BufferedOutputStream(rawOutput)).use { zip ->
+        zip.setLevel(Deflater.NO_COMPRESSION)
+        for ((name, file) in filesToExport) {
+          val entry = ZipEntry(name)
+          if (file.lastModified() > 0L) {
+            entry.time = file.lastModified()
+          }
+          zip.putNextEntry(entry)
+          file.inputStream().use { input ->
+            input.copyTo(zip)
+          }
+          zip.closeEntry()
+        }
+        zip.finish()
+      }
+    } ?: throw IOException(getString(R.string.settings_export_emulator_files_open_failed))
+
+    return filesToExport.map { it.first }
+  }
+
+  private fun resolveManagedFilesForExport(): List<Pair<String, File>> {
+    return MANAGED_EMULATOR_FILE_ORDER.mapNotNull { fileName ->
+      resolveManagedExportSource(fileName)
+        ?.takeIf { it.isFile }
+        ?.let { fileName to it }
+    }
+  }
+
+  private fun importManagedFilesFromZip(uri: Uri) {
+    if (isImportingEmulatorFiles || isExportingEmulatorFiles) {
+      return
+    }
+
+    isImportingEmulatorFiles = true
+    updateEmulatorFilesActionState()
+    Toast.makeText(this, R.string.settings_import_emulator_files_working, Toast.LENGTH_SHORT).show()
+
+    Thread {
+      val result = runCatching {
+        importManagedFilesFromZipInternal(uri)
+      }
+
+      runOnUiThread {
+        isImportingEmulatorFiles = false
+        updateEmulatorFilesActionState()
+        result.onSuccess(::finishManagedFilesImport)
+          .onFailure { error ->
+            Toast.makeText(
+              this,
+              getString(
+                R.string.settings_import_emulator_files_failed,
+                error.message ?: getString(R.string.settings_import_emulator_files_unknown_error),
+              ),
+              Toast.LENGTH_LONG,
+            ).show()
+          }
+      }
+    }.start()
+  }
+
+  private fun importManagedFilesFromDocuments(uris: List<Uri>) {
+    if (isImportingEmulatorFiles || isExportingEmulatorFiles) {
+      return
+    }
+
+    isImportingEmulatorFiles = true
+    updateEmulatorFilesActionState()
+    Toast.makeText(this, R.string.settings_import_emulator_files_working, Toast.LENGTH_SHORT).show()
+
+    Thread {
+      val result = runCatching {
+        importManagedFilesFromDocumentsInternal(uris)
+      }
+
+      runOnUiThread {
+        isImportingEmulatorFiles = false
+        updateEmulatorFilesActionState()
+        result.onSuccess(::finishManagedFilesImport)
+          .onFailure { error ->
+            Toast.makeText(
+              this,
+              getString(
+                R.string.settings_import_emulator_files_failed,
+                error.message ?: getString(R.string.settings_import_emulator_files_unknown_error),
+              ),
+              Toast.LENGTH_LONG,
+            ).show()
+          }
+      }
+    }.start()
+  }
+
+  private fun importManagedFilesFromZipInternal(uri: Uri): List<String> {
+    ensureManagedFilesRoot()
+    val editor = prefs.edit()
+    val importedNames = linkedSetOf<String>()
+
+    contentResolver.openInputStream(uri)?.use { rawInput ->
+      ZipInputStream(BufferedInputStream(rawInput)).use { zip ->
+        while (true) {
+          val entry = zip.nextEntry ?: break
+          if (!entry.isDirectory) {
+            val normalizedName = normalizeManagedFileName(entry.name)
+            if (normalizedName != null && importedNames.add(normalizedName)) {
+              val target = resolveManagedImportTarget(normalizedName)
+              copyZipEntryToFile(zip, target)
+              applyImportedManagedFile(normalizedName, target, editor)
+            }
+          }
+          zip.closeEntry()
+        }
+      }
+    } ?: throw IOException(getString(R.string.settings_import_emulator_files_open_failed))
+
+    if (importedNames.isEmpty()) {
+      throw IOException(getString(R.string.settings_import_emulator_files_zip_empty))
+    }
+
+    editor.apply()
+    return sortManagedFileNames(importedNames)
+  }
+
+  private fun importManagedFilesFromDocumentsInternal(uris: List<Uri>): List<String> {
+    ensureManagedFilesRoot()
+    val selectedFiles = linkedMapOf<String, Uri>()
+
+    for (uri in uris) {
+      val rawName = getFileName(uri) ?: uri.lastPathSegment ?: continue
+      val normalizedName = normalizeManagedFileName(rawName) ?: continue
+      if (selectedFiles.containsKey(normalizedName)) {
+        throw IOException(getString(R.string.settings_import_emulator_files_duplicate, normalizedName))
+      }
+      selectedFiles[normalizedName] = uri
+    }
+
+    if (selectedFiles.isEmpty()) {
+      throw IOException(getString(R.string.settings_import_emulator_files_pick_files_error))
+    }
+
+    val editor = prefs.edit()
+    for ((fileName, uri) in selectedFiles) {
+      val target = resolveManagedImportTarget(fileName)
+      copyUriToFile(uri, target)
+      applyImportedManagedFile(fileName, target, editor)
+    }
+    editor.apply()
+
+    return sortManagedFileNames(selectedFiles.keys)
+  }
+
+  private fun finishManagedFilesImport(importedNames: List<String>) {
+    val summary = importedNames.joinToString(", ")
+    Toast.makeText(
+      this,
+      getString(R.string.settings_import_emulator_files_success, summary),
+      Toast.LENGTH_LONG,
+    ).show()
+    recreate()
+  }
+
+  private fun copyZipEntryToFile(zip: ZipInputStream, target: File) {
+    val parent = target.parentFile
+    if (parent != null && !parent.exists() && !parent.mkdirs()) {
+      throw IOException("Failed to prepare ${parent.absolutePath}.")
+    }
+    FileOutputStream(target).use { output ->
+      zip.copyTo(output)
+    }
+  }
+
+  private fun resolveManagedFilesRoot(): File {
+    val base = getExternalFilesDir(null) ?: filesDir
+    return File(base, "x1box")
+  }
+
+  private fun ensureManagedFilesRoot(): File {
+    val dir = resolveManagedFilesRoot()
+    if (!dir.exists() && !dir.mkdirs()) {
+      throw IOException("Failed to prepare the emulator files folder.")
+    }
+    return dir
+  }
+
+  private fun resolveManagedImportTarget(fileName: String): File {
+    return File(resolveManagedFilesRoot(), fileName)
+  }
+
+  private fun resolveManagedExportSource(fileName: String): File? {
+    return when (fileName) {
+      "mcpx.bin" -> resolveConfiguredFileOrLocalFallback("mcpxPath", "mcpx.bin")
+      "flash.bin" -> resolveConfiguredFileOrLocalFallback("flashPath", "flash.bin")
+      "hdd.img" -> resolveConfiguredFileOrLocalFallback("hddPath", "hdd.img")
+      "eeprom.bin" -> resolveEepromFile().takeIf { it.isFile }
+      "xemu.toml" -> resolveManagedImportTarget("xemu.toml").takeIf { it.isFile }
+      else -> null
+    }
+  }
+
+  private fun resolveConfiguredFileOrLocalFallback(pathKey: String, fallbackName: String): File? {
+    val configuredFile = prefs.getString(pathKey, null)
+      ?.let(::File)
+      ?.takeIf { it.isFile }
+    if (configuredFile != null) {
+      return configuredFile
+    }
+
+    val localFile = File(resolveManagedFilesRoot(), fallbackName)
+    return localFile.takeIf { it.isFile }
+  }
+
+  private fun normalizeManagedFileName(rawName: String): String? {
+    val trimmed = rawName.replace('\\', '/').substringAfterLast('/').trim()
+    if (trimmed.isBlank()) {
+      return null
+    }
+    val normalized = trimmed.lowercase(Locale.US)
+    return normalized.takeIf { it in MANAGED_EMULATOR_FILE_NAMES }
+  }
+
+  private fun sortManagedFileNames(names: Iterable<String>): List<String> {
+    return names.sortedBy { MANAGED_EMULATOR_FILE_ORDER.indexOf(it) }
+  }
+
+  private fun applyImportedManagedFile(
+    fileName: String,
+    target: File,
+    editor: android.content.SharedPreferences.Editor,
+  ) {
+    when (fileName) {
+      "mcpx.bin" -> editor.putString("mcpxPath", target.absolutePath).remove("mcpxUri")
+      "flash.bin" -> editor.putString("flashPath", target.absolutePath).remove("flashUri")
+      "hdd.img" -> editor.putString("hddPath", target.absolutePath).remove("hddUri")
+      "xemu.toml" -> applyImportedConfigToml(target, editor)
+    }
+  }
+
+  private fun applyImportedConfigToml(
+    file: File,
+    editor: android.content.SharedPreferences.Editor,
+  ) {
+    val sections = parseSimpleTomlSections(file)
+
+    parseTomlBoolean(sections, "general", "skip_boot_anim")
+      ?.let { editor.putBoolean("setting_skip_boot_anim", it) }
+    parseTomlString(sections, "display", "renderer")
+      ?.lowercase(Locale.US)
+      ?.takeIf { it == "opengl" || it == "vulkan" }
+      ?.let { editor.putString("setting_renderer", it) }
+    parseTomlString(sections, "display", "filtering")
+      ?.lowercase(Locale.US)
+      ?.takeIf { it == "linear" || it == "nearest" }
+      ?.let { editor.putString("setting_filtering", it) }
+    parseTomlBoolean(sections, "display.window", "vsync")
+      ?.let { editor.putBoolean("setting_vsync", it) }
+    parseTomlInt(sections, "display.quality", "surface_scale")
+      ?.coerceIn(1, 3)
+      ?.let { editor.putInt("setting_surface_scale", it) }
+    parseTomlBoolean(sections, "audio", "use_dsp")
+      ?.let { editor.putBoolean("setting_use_dsp", it) }
+    parseTomlBoolean(sections, "audio", "hrtf")
+      ?.let { editor.putBoolean(PREF_HRTF, it) }
+    parseTomlBoolean(sections, "perf", "cache_shaders")
+      ?.let { editor.putBoolean("setting_cache_shaders", it) }
+    parseTomlBoolean(sections, "perf", "hard_fpu")
+      ?.let { editor.putBoolean("setting_hard_fpu", it) }
+    parseTomlString(sections, "android", "tcg_thread")
+      ?.lowercase(Locale.US)
+      ?.takeIf { it == "single" || it == "multi" }
+      ?.let { editor.putString("setting_tcg_thread", it) }
+    parseTomlString(sections, "android", "audio_driver")
+      ?.let(::normalizeImportedAudioDriver)
+      ?.let { editor.putString("setting_audio_driver", it) }
+    parseTomlBoolean(sections, "net", "enable")
+      ?.let { editor.putBoolean("setting_network_enable", it) }
+    parseTomlInt(sections, "sys", "mem_limit")
+      ?.takeIf { it == 64 || it == 128 }
+      ?.let { editor.putInt("setting_system_memory_mib", it) }
+  }
+
+  private fun parseSimpleTomlSections(file: File): Map<String, Map<String, String>> {
+    val sections = linkedMapOf<String, MutableMap<String, String>>()
+    var currentSection = ""
+
+    file.forEachLine { rawLine ->
+      val trimmed = stripTomlComment(rawLine).trim()
+      if (trimmed.isBlank()) {
+        return@forEachLine
+      }
+      if (trimmed.startsWith('[') && trimmed.endsWith(']')) {
+        currentSection = trimmed.substring(1, trimmed.length - 1).trim()
+        return@forEachLine
+      }
+
+      val separator = trimmed.indexOf('=')
+      if (separator <= 0) {
+        return@forEachLine
+      }
+
+      val key = trimmed.substring(0, separator).trim()
+      val value = trimmed.substring(separator + 1).trim()
+      if (key.isEmpty() || value.isEmpty()) {
+        return@forEachLine
+      }
+
+      sections.getOrPut(currentSection) { linkedMapOf() }[key] = value
+    }
+
+    return sections
+  }
+
+  private fun stripTomlComment(line: String): String {
+    var inString = false
+    var escaping = false
+
+    for ((index, char) in line.withIndex()) {
+      when {
+        char == '"' && !escaping -> inString = !inString
+        char == '#' && !inString -> return line.substring(0, index)
+      }
+
+      escaping = if (char == '\\' && inString) {
+        !escaping
+      } else {
+        false
+      }
+    }
+
+    return line
+  }
+
+  private fun parseTomlBoolean(
+    sections: Map<String, Map<String, String>>,
+    section: String,
+    key: String,
+  ): Boolean? {
+    return when (sections[section]?.get(key)?.trim()?.lowercase(Locale.US)) {
+      "true" -> true
+      "false" -> false
+      else -> null
+    }
+  }
+
+  private fun parseTomlInt(
+    sections: Map<String, Map<String, String>>,
+    section: String,
+    key: String,
+  ): Int? {
+    val rawValue = sections[section]?.get(key)?.trim() ?: return null
+    return rawValue.toIntOrNull() ?: decodeTomlString(rawValue)?.toIntOrNull()
+  }
+
+  private fun parseTomlString(
+    sections: Map<String, Map<String, String>>,
+    section: String,
+    key: String,
+  ): String? {
+    val rawValue = sections[section]?.get(key)?.trim() ?: return null
+    return decodeTomlString(rawValue) ?: rawValue
+  }
+
+  private fun decodeTomlString(rawValue: String): String? {
+    if (rawValue.length < 2 || rawValue.first() != '"' || rawValue.last() != '"') {
+      return null
+    }
+
+    val inner = rawValue.substring(1, rawValue.length - 1)
+    return inner
+      .replace("\\\\", "\\")
+      .replace("\\\"", "\"")
+  }
+
+  private fun normalizeImportedAudioDriver(rawValue: String): String? {
+    return when (rawValue.trim().lowercase(Locale.US)) {
+      "android",
+      "audiotrack",
+      "opensl",
+      "opensles",
+      "opensl_es",
+      "opensl-es",
+      "openslesaudio",
+      "openslesbackend" -> "openslES"
+      "aaudio" -> "aaudio"
+      "dummy", "disabled" -> "dummy"
+      else -> null
+    }
   }
 
   private fun setAdvancedExperimentalExpanded(expanded: Boolean) {
