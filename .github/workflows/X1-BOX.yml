@@ -57,48 +57,76 @@ jobs:
             unzip
 
       - name: Install Rust (rustup + cargo)
+        shell: bash
         run: |
+          set -e
           echo "CARGO_HOME=$HOME/.cargo" >> $GITHUB_ENV
           echo "RUSTUP_HOME=$HOME/.rustup" >> $GITHUB_ENV
           curl -sSf https://sh.rustup.rs | sh -s -- -y
           echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+          rustc --version
+          cargo --version
 
-      - name: Add Rust Android target
-        run: rustup target add aarch64-linux-android
-
-      - name: Export Android toolchain
+      - name: Add Rust Android target (arm64)
+        shell: bash
         run: |
+          set -e
+          rustup target add aarch64-linux-android
+          rustup target list --installed
+
+      - name: Export Android toolchain for cargo
+        shell: bash
+        run: |
+          set -e
           echo "CC_aarch64_linux_android=$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang" >> $GITHUB_ENV
           echo "CXX_aarch64_linux_android=$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang++" >> $GITHUB_ENV
           echo "AR_aarch64_linux_android=$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar" >> $GITHUB_ENV
 
-      - name: Detect App Name + Version
+      - name: Detect App Name + Version (auto)
+        id: meta
+        shell: bash
         run: |
+          set -e
           GRADLE="android/app/build.gradle.kts"
           STRINGS="android/app/src/main/res/values/strings.xml"
 
-          VERSION_NAME=$(grep -m1 'versionName' "$GRADLE" | sed -E 's/.*"([^"]+)".*/\1/')
-          APP_NAME=$(grep -m1 'app_name' "$STRINGS" | sed -E 's/.*>([^<]+)<.*/\1/')
+          VERSION_NAME=$(grep -m1 -E 'versionName\s*=' "$GRADLE" | sed -E 's/.*"([^"]+)".*/\1/')
+          APP_NAME=$(grep -m1 -E '<string\s+name="app_name"\s*>' "$STRINGS" | sed -E 's/.*>([^<]+)<\/string>.*/\1/')
           APP_NAME_SAFE=$(echo "$APP_NAME" | tr ' ' '-' | tr -cd 'A-Za-z0-9._-')
 
           echo "VERSION_NAME=$VERSION_NAME" >> $GITHUB_ENV
+          echo "APP_NAME=$APP_NAME" >> $GITHUB_ENV
           echo "APP_NAME_SAFE=$APP_NAME_SAFE" >> $GITHUB_ENV
 
-      - name: Fix Gradle JVM
+      - name: Remove org.gradle.java.home (force setup-java)
         run: |
           for f in android/gradle.properties gradle.properties "$HOME/.gradle/gradle.properties"; do
-            [ -f "$f" ] && sed -i '/org.gradle.java.home/d' "$f"
+            if [ -f "$f" ]; then
+              sed -i '/^\s*org\.gradle\.java\.home\s*=/d' "$f"
+            fi
           done
+
+      - name: Fix DEFAULT_JVM_OPTS in gradlew
+        run: |
+          if [ -f android/gradlew ]; then
+            sed -i 's/^DEFAULT_JVM_OPTS=.*/DEFAULT_JVM_OPTS="-Xmx2g -Xms256m"/' android/gradlew || true
+          fi
 
       - name: Improve Gradle memory
         run: |
-          mkdir -p ~/.gradle
-          echo "org.gradle.jvmargs=-Xmx6g -Xms512m" > ~/.gradle/gradle.properties
+          mkdir -p "$HOME/.gradle"
+          cat > "$HOME/.gradle/gradle.properties" << 'EOF'
+          org.gradle.jvmargs=-Xmx6g -Xms512m -Dfile.encoding=UTF-8
+          org.gradle.daemon=false
+          org.gradle.parallel=true
+          org.gradle.caching=true
+          EOF
 
-      - name: Patch NDK path
-        run: grep -RIl "windows-x86_64" android | xargs -r sed -i 's/windows-x86_64/linux-x86_64/g'
+      - name: Patch NDK prebuilt host tag
+        run: |
+          grep -RIl "windows-x86_64" android | xargs -r sed -i 's/windows-x86_64/linux-x86_64/g'
 
-      - name: Clean build cache
+      - name: Delete .cxx
         run: |
           rm -rf android/app/.cxx
           rm -rf android/app/build
@@ -106,24 +134,14 @@ jobs:
       - name: Decode keystore
         run: echo "${{ secrets.ANDROID_KEYSTORE_B64 }}" | base64 -d > android/app/release.jks
 
-      - name: Create key.properties
+      - name: Create key.properties for Gradle signing
         run: |
-          echo "storeFile=release.jks" > android/key.properties
-          echo "storePassword=${{ secrets.ANDROID_KEYSTORE_PASSWORD }}" >> android/key.properties
-          echo "keyAlias=${{ secrets.ANDROID_KEY_ALIAS }}" >> android/key.properties
-          echo "keyPassword=${{ secrets.ANDROID_KEY_PASSWORD }}" >> android/key.properties
-
-      - name: Add DNDEBUG and gc-sections (safe)
-        run: |
-          FILE="android/app/build.gradle.kts"
-
-          sed -i 's/-DCMAKE_C_FLAGS_RELEASE=-O2 -g0 -fvisibility=hidden/-DCMAKE_C_FLAGS_RELEASE=-O2 -DNDEBUG -g0 -fvisibility=hidden/g' $FILE
-
-          sed -i 's/-DCMAKE_CXX_FLAGS_RELEASE=-O2 -g0 -fvisibility=hidden/-DCMAKE_CXX_FLAGS_RELEASE=-O2 -DNDEBUG -g0 -fvisibility=hidden/g' $FILE
-
-          if ! grep -q "gc-sections,-s" $FILE; then
-            sed -i '/arguments += listOf/a\            "-DCMAKE_SHARED_LINKER_FLAGS=-Wl,--gc-sections,-s",' $FILE
-          fi
+          {
+            echo "storeFile=release.jks"
+            echo "storePassword=${{ secrets.ANDROID_KEYSTORE_PASSWORD }}"
+            echo "keyAlias=${{ secrets.ANDROID_KEY_ALIAS }}"
+            echo "keyPassword=${{ secrets.ANDROID_KEY_PASSWORD }}"
+          } > android/key.properties
 
       - name: Build Release APK
         working-directory: android
@@ -131,18 +149,30 @@ jobs:
           chmod +x gradlew
           ./gradlew --no-daemon clean :app:assembleRelease
 
-      - name: Prepare APK
+      - name: Set unique Release Tag
         run: |
-          APK=$(find android/app/build/outputs/apk/release -name "*.apk" | head -n 1)
-          FINAL="android/app/build/outputs/apk/release/${APP_NAME_SAFE}-${VERSION_NAME}.apk"
-          mv "$APK" "$FINAL"
-          echo "SIGNED_APK=$FINAL" >> $GITHUB_ENV
+          BASE="${APP_NAME_SAFE}-${VERSION_NAME}"
+          echo "REL_TAG=$BASE" >> $GITHUB_ENV
+          echo "REL_NAME=$BASE" >> $GITHUB_ENV
 
-      - name: Upload Release
+      - name: Get signed APK from Gradle (rename)
+        run: |
+          APK_DIR="android/app/build/outputs/apk/release"
+          SRC_APK=$(find "$APK_DIR" -type f -name "*release*.apk" ! -name "*unsigned*" | head -n 1)
+          FINAL_APK="$APK_DIR/${APP_NAME_SAFE}-${VERSION_NAME}.apk"
+
+          mv "$SRC_APK" "$FINAL_APK"
+          echo "SIGNED_APK=$FINAL_APK" >> $GITHUB_ENV
+
+      - name: Verify signed APK
+        run: |
+          "$ANDROID_SDK_ROOT/build-tools/36.1.0/apksigner" verify --verbose "${{ env.SIGNED_APK }}"
+
+      - name: Create GitHub Release + Upload APK
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: "${{ env.APP_NAME_SAFE }}-${{ env.VERSION_NAME }}"
-          name: "${{ env.APP_NAME_SAFE }}-${{ env.VERSION_NAME }}"
+          tag_name: "${{ env.REL_TAG }}"
+          name: "${{ env.REL_NAME }}"
           files: ${{ env.SIGNED_APK }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
