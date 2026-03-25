@@ -147,37 +147,36 @@ jobs:
         run: |
           python3 - <<'PY'
           from pathlib import Path
-          import re
+          import sys
 
           p = Path("android/app/build.gradle.kts")
           s = p.read_text(encoding="utf-8")
+          original = s
 
-          def add_flag(text: str, key: str, flag: str) -> str:
-              pattern = rf'("{re.escape(key)}[^"]*)"'
-              def repl(m):
-                  value = m.group(1)
-                  if flag in value:
-                      return f'"{value}"'
-                  return f'"{value} {flag}"'
-              return re.sub(pattern, repl, text)
+          replacements = {
+              '"-DCMAKE_C_FLAGS_RELWITHDEBINFO=-O2 -g0 -fvisibility=hidden",':
+              '"-DCMAKE_C_FLAGS_RELWITHDEBINFO=-O2 -DNDEBUG -g0 -fvisibility=hidden",',
 
-          s = add_flag(s, "-DCMAKE_C_FLAGS_RELWITHDEBINFO=", "-DNDEBUG")
-          s = add_flag(s, "-DCMAKE_CXX_FLAGS_RELWITHDEBINFO=", "-DNDEBUG")
-          s = add_flag(s, "-DCMAKE_C_FLAGS_RELEASE=", "-DNDEBUG")
-          s = add_flag(s, "-DCMAKE_CXX_FLAGS_RELEASE=", "-DNDEBUG")
+              '"-DCMAKE_CXX_FLAGS_RELWITHDEBINFO=-O2 -g0 -fvisibility=hidden",':
+              '"-DCMAKE_CXX_FLAGS_RELWITHDEBINFO=-O2 -DNDEBUG -g0 -fvisibility=hidden",',
 
-          if '-DCMAKE_SHARED_LINKER_FLAGS=-Wl,--gc-sections,-s' not in s:
-              if '-DCMAKE_SHARED_LINKER_FLAGS=' in s:
-                  s = s.replace(
-                      '-DCMAKE_SHARED_LINKER_FLAGS=',
-                      '-DCMAKE_SHARED_LINKER_FLAGS=-Wl,--gc-sections,-s'
-                  )
-              else:
-                  target = '"-DCMAKE_CXX_FLAGS_RELEASE=-O2 -g0 -fvisibility=hidden",'
-                  replacement = target + '\n          "-DCMAKE_SHARED_LINKER_FLAGS=-Wl,--gc-sections,-s",'
-                  s = s.replace(target, replacement)
+              '"-DCMAKE_C_FLAGS_RELEASE=-O2 -g0 -fvisibility=hidden",':
+              '"-DCMAKE_C_FLAGS_RELEASE=-O2 -DNDEBUG -g0 -fvisibility=hidden",',
 
-          p.write_text(s, encoding="utf-8")
+              '"-DCMAKE_CXX_FLAGS_RELEASE=-O2 -g0 -fvisibility=hidden",':
+              '"-DCMAKE_CXX_FLAGS_RELEASE=-O2 -DNDEBUG -g0 -fvisibility=hidden",\n'
+              '          "-DCMAKE_SHARED_LINKER_FLAGS=-Wl,--gc-sections,-s",',
+          }
+
+          for old, new in replacements.items():
+              if old in s and new not in s:
+                  s = s.replace(old, new)
+
+          if s == original:
+              print("No changes applied.")
+          else:
+              p.write_text(s, encoding="utf-8")
+              print("DNDEBUG and gc-sections patch applied.")
           PY
 
       - name: Build Release APK
