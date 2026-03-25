@@ -99,7 +99,9 @@ jobs:
           echo "APP_NAME_SAFE=$APP_NAME_SAFE" >> $GITHUB_ENV
 
       - name: Remove org.gradle.java.home (force setup-java)
+        shell: bash
         run: |
+          set -e
           for f in android/gradle.properties gradle.properties "$HOME/.gradle/gradle.properties"; do
             if [ -f "$f" ]; then
               sed -i '/^\s*org\.gradle\.java\.home\s*=/d' "$f"
@@ -107,7 +109,9 @@ jobs:
           done
 
       - name: Fix DEFAULT_JVM_OPTS in gradlew
+        shell: bash
         run: |
+          set -e
           if [ -f android/gradlew ]; then
             sed -i 's/^DEFAULT_JVM_OPTS=.*/DEFAULT_JVM_OPTS="-Xmx2g -Xms256m"/' android/gradlew || true
           fi
@@ -123,7 +127,9 @@ jobs:
           EOF
 
       - name: Patch NDK prebuilt host tag
+        shell: bash
         run: |
+          set -e
           grep -RIl "windows-x86_64" android | xargs -r sed -i 's/windows-x86_64/linux-x86_64/g'
 
       - name: Delete .cxx
@@ -143,6 +149,63 @@ jobs:
             echo "keyPassword=${{ secrets.ANDROID_KEY_PASSWORD }}"
           } > android/key.properties
 
+      - name: Enable LTO + clean release symbols in build.gradle.kts
+        shell: bash
+        run: |
+          set -e
+          FILE="android/app/build.gradle.kts"
+
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          p = Path("android/app/build.gradle.kts")
+          s = p.read_text(encoding="utf-8")
+
+          replacements = {
+              '-DCMAKE_C_FLAGS_RELWITHDEBINFO=-O3 -g0 -march=armv8-a+simd -fvisibility=hidden -ffunction-sections -fdata-sections':
+              '-DCMAKE_C_FLAGS_RELWITHDEBINFO=-O3 -DNDEBUG -g0 -flto -march=armv8-a+simd -fvisibility=hidden -ffunction-sections -fdata-sections',
+
+              '-DCMAKE_CXX_FLAGS_RELWITHDEBINFO=-O3 -g0 -march=armv8-a+simd -fvisibility=hidden -ffunction-sections -fdata-sections':
+              '-DCMAKE_CXX_FLAGS_RELWITHDEBINFO=-O3 -DNDEBUG -g0 -flto -march=armv8-a+simd -fvisibility=hidden -ffunction-sections -fdata-sections',
+
+              '-DCMAKE_C_FLAGS_RELEASE=-O3 -g0 -march=armv8-a+simd -fvisibility=hidden -ffunction-sections -fdata-sections':
+              '-DCMAKE_C_FLAGS_RELEASE=-O3 -DNDEBUG -g0 -flto -march=armv8-a+simd -fvisibility=hidden -ffunction-sections -fdata-sections',
+
+              '-DCMAKE_CXX_FLAGS_RELEASE=-O3 -g0 -march=armv8-a+simd -fvisibility=hidden -ffunction-sections -fdata-sections':
+              '-DCMAKE_CXX_FLAGS_RELEASE=-O3 -DNDEBUG -g0 -flto -march=armv8-a+simd -fvisibility=hidden -ffunction-sections -fdata-sections',
+          }
+
+          changed = False
+          for old, new in replacements.items():
+              if old in s:
+                  s = s.replace(old, new)
+                  changed = True
+
+          release_match = re.search(r'release\s*\{.*?\n\s*\}', s, re.DOTALL)
+          if release_match:
+              release_block = release_match.group(0)
+              if 'debugSymbolLevel = "NONE"' not in release_block:
+                  new_release_block = re.sub(
+                      r'(release\s*\{\n)',
+                      r'\1        ndk {\n            debugSymbolLevel = "NONE"\n        }\n\n',
+                      release_block,
+                      count=1
+                  )
+                  s = s.replace(release_block, new_release_block, 1)
+                  changed = True
+
+          p.write_text(s, encoding="utf-8")
+
+          if not changed:
+              print("Warning: no matching lines found; nothing changed.")
+          else:
+              print("LTO + release symbol cleanup patch applied.")
+          PY
+
+          grep -nE 'flto|DNDEBUG' "$FILE" || true
+          grep -n 'debugSymbolLevel = "NONE"' "$FILE" || true
+
       - name: Build Release APK
         working-directory: android
         run: |
@@ -157,9 +220,15 @@ jobs:
 
       - name: Get signed APK from Gradle (rename)
         run: |
+          set -e
           APK_DIR="android/app/build/outputs/apk/release"
           SRC_APK=$(find "$APK_DIR" -type f -name "*release*.apk" ! -name "*unsigned*" | head -n 1)
           FINAL_APK="$APK_DIR/${APP_NAME_SAFE}-${VERSION_NAME}.apk"
+
+          if [ -z "$SRC_APK" ]; then
+            find android/app/build/outputs/apk -type f -name "*.apk" || true
+            exit 1
+          fi
 
           mv "$SRC_APK" "$FINAL_APK"
           echo "SIGNED_APK=$FINAL_APK" >> $GITHUB_ENV
@@ -173,6 +242,7 @@ jobs:
         with:
           tag_name: "${{ env.REL_TAG }}"
           name: "${{ env.REL_NAME }}"
-          files: ${{ env.SIGNED_APK }}
+          files: |
+            ${{ env.SIGNED_APK }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
