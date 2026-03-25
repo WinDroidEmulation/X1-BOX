@@ -46,8 +46,8 @@ android {
           "-DCMAKE_CXX_FLAGS_DEBUG=-O2 -g0",
           "-DCMAKE_C_FLAGS_RELWITHDEBINFO=-O2 -g0 -fvisibility=hidden",
           "-DCMAKE_CXX_FLAGS_RELWITHDEBINFO=-O2 -g0 -fvisibility=hidden",
-          "-DCMAKE_C_FLAGS_RELEASE=-O2 -g0 -fvisibility=hidden",
-          "-DCMAKE_CXX_FLAGS_RELEASE=-O2 -g0 -fvisibility=hidden",
+          "-DCMAKE_C_FLAGS_RELEASE=-O2 -g0 -fvisibility=hidden -march=armv8-a+crypto+crc -mtune=cortex-a76 -ffunction-sections -fdata-sections",
+          "-DCMAKE_CXX_FLAGS_RELEASE=-O2 -g0 -fvisibility=hidden -march=armv8-a+crypto+crc -mtune=cortex-a76 -ffunction-sections -fdata-sections",
         )
         cppFlags += listOf("-std=c++17", "-fexceptions", "-frtti")
       }
