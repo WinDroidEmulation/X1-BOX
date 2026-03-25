@@ -161,28 +161,88 @@ jobs:
 
           p = Path("android/app/build.gradle.kts")
           s = p.read_text(encoding="utf-8")
+          changed = False
 
-          s = s.replace(
-              '-DCMAKE_SHARED_LINKER_FLAGS=-Wl,--gc-sections"',
-              '-DCMAKE_SHARED_LINKER_FLAGS=-Wl,--gc-sections,-s"'
-          )
+          replacements = {
+              '-DCMAKE_C_FLAGS_RELWITHDEBINFO=-O3 -g0 -march=armv8-a+simd -fvisibility=hidden -ffunction-sections -fdata-sections':
+              '-DCMAKE_C_FLAGS_RELWITHDEBINFO=-O3 -DNDEBUG -g0 -march=armv8-a+simd -fvisibility=hidden -ffunction-sections -fdata-sections',
 
-          # Add debugSymbolLevel = NONE in release
-          s = re.sub(
-              r'(release\s*\{\n)',
-              r'\1      ndk {\n        debugSymbolLevel = "NONE"\n      }\n',
-              s,
-              count=1
-          )
+              '-DCMAKE_CXX_FLAGS_RELWITHDEBINFO=-O3 -g0 -march=armv8-a+simd -fvisibility=hidden -ffunction-sections -fdata-sections':
+              '-DCMAKE_CXX_FLAGS_RELWITHDEBINFO=-O3 -DNDEBUG -g0 -march=armv8-a+simd -fvisibility=hidden -ffunction-sections -fdata-sections',
 
-          # Add META-INF cleanup
-          s = s.replace(
-              'META-INF/NOTICE*',
-              'META-INF/NOTICE*",\n                "META-INF/AL2.0",\n                "META-INF/LGPL2.1'
-          )
+              '-DCMAKE_C_FLAGS_RELEASE=-O3 -g0 -march=armv8-a+simd -fvisibility=hidden -ffunction-sections -fdata-sections':
+              '-DCMAKE_C_FLAGS_RELEASE=-O3 -DNDEBUG -g0 -march=armv8-a+simd -fvisibility=hidden -ffunction-sections -fdata-sections',
+
+              '-DCMAKE_CXX_FLAGS_RELEASE=-O3 -g0 -march=armv8-a+simd -fvisibility=hidden -ffunction-sections -fdata-sections':
+              '-DCMAKE_CXX_FLAGS_RELEASE=-O3 -DNDEBUG -g0 -march=armv8-a+simd -fvisibility=hidden -ffunction-sections -fdata-sections',
+
+              '-DCMAKE_SHARED_LINKER_FLAGS=-Wl,--gc-sections"':
+              '-DCMAKE_SHARED_LINKER_FLAGS=-Wl,--gc-sections,-s"',
+          }
+
+          for old, new in replacements.items():
+              if old in s:
+                  s = s.replace(old, new)
+                  changed = True
+
+          release_match = re.search(r'release\s*\{.*?\n\s*\}', s, re.DOTALL)
+          if release_match:
+              release_block = release_match.group(0)
+              if 'debugSymbolLevel = "NONE"' not in release_block:
+                  new_release_block = re.sub(
+                      r'(release\s*\{\n)',
+                      r'\1      ndk {\n        debugSymbolLevel = "NONE"\n      }\n',
+                      release_block,
+                      count=1
+                  )
+                  s = s.replace(release_block, new_release_block, 1)
+                  changed = True
+
+          packaging_match = re.search(r'packaging\s*\{.*?\n\s*\}', s, re.DOTALL)
+          if packaging_match:
+              packaging_block = packaging_match.group(0)
+
+              updated_packaging = packaging_block
+
+              if 'jniLibs {' not in updated_packaging:
+                  updated_packaging = re.sub(
+                      r'(packaging\s*\{\n)',
+                      r'\1    jniLibs {\n      useLegacyPackaging = false\n    }\n',
+                      updated_packaging,
+                      count=1
+                  )
+
+              excludes_pattern = r'resources\.excludes\s*\+=\s*setOf\((.*?)\)'
+              m = re.search(excludes_pattern, updated_packaging, re.DOTALL)
+              if m:
+                  block = m.group(1)
+                  extras = [
+                      '"**/*.txt"',
+                      '"**/*.html"',
+                      '"**/*.js"',
+                      '"META-INF/AL2.0"',
+                      '"META-INF/LGPL2.1"',
+                  ]
+                  missing = [x for x in extras if x not in block]
+                  if missing:
+                      insert = ",\n      " + ",\n      ".join(missing)
+                      updated_full = m.group(0).replace(m.group(1), block + insert)
+                      updated_packaging = updated_packaging.replace(m.group(0), updated_full, 1)
+
+              if updated_packaging != packaging_block:
+                  s = s.replace(packaging_block, updated_packaging, 1)
+                  changed = True
 
           p.write_text(s, encoding="utf-8")
+
+          if not changed:
+              print("Warning: no matching lines found; nothing changed.")
+          else:
+              print("Size optimization patch applied successfully.")
           PY
+
+          echo "==== verify patched lines ===="
+          grep -nE 'DNDEBUG|gc-sections,-s|debugSymbolLevel = "NONE"|useLegacyPackaging|META-INF/AL2.0|META-INF/LGPL2.1|\*\*/\*\.txt|\*\*/\*\.html|\*\*/\*\.js' "$FILE" || true
 
       - name: Build Release APK
         working-directory: android
