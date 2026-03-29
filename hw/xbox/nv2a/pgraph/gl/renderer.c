@@ -121,7 +121,11 @@ static void pgraph_gl_init(NV2AState *d, Error **errp)
         }
         if (sscanf(glsl_version, "%d.%d", &glsl_es_major, &glsl_es_minor) ==
             2) {
-            r->gles_version = glsl_es_major * 100 + glsl_es_minor * 10;
+            if (glsl_es_minor < 10) {
+                glsl_es_minor *= 10;
+            }
+            r->gles_version = glsl_es_major * 100 + glsl_es_minor;
+            r->gles_version = MIN(r->gles_version, 320);
         }
     }
     r->geometry_shaders_supported =
