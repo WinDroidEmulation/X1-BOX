@@ -148,6 +148,21 @@ typedef struct SurfaceBinding {
     bool initialized;
 } SurfaceBinding;
 
+typedef struct SurfaceImageConfig {
+    VkFormat format;
+    uint32_t width, height;
+    VkImageUsageFlags usage;
+} SurfaceImageConfig;
+
+typedef struct PooledSurfaceImage {
+    QTAILQ_ENTRY(PooledSurfaceImage) entry;
+    SurfaceImageConfig config;
+    VkImage image;
+    VmaAllocation allocation;
+    VkImage image_scratch;
+    VmaAllocation allocation_scratch;
+} PooledSurfaceImage;
+
 typedef struct ShaderModuleInfo {
     int refcnt;
     char *glsl;
@@ -393,6 +408,8 @@ typedef struct PGRAPHVkState {
 
     QTAILQ_HEAD(, SurfaceBinding) surfaces;
     QTAILQ_HEAD(, SurfaceBinding) invalid_surfaces;
+    QTAILQ_HEAD(, PooledSurfaceImage) surface_image_pool;
+    int surface_image_pool_count;
     SurfaceBinding *color_binding, *zeta_binding;
     bool downloads_pending;
     QemuEvent downloads_complete;
@@ -415,6 +432,7 @@ typedef struct PGRAPHVkState {
 
     Lru shader_module_cache;
     ShaderModuleCacheEntry *shader_module_cache_entries;
+    size_t shader_module_cache_target;
 
     // FIXME: Merge these into a structure
     uint64_t uniform_buffer_hashes[2];
@@ -516,6 +534,8 @@ VkDeviceSize pgraph_vk_update_vertex_inline_buffer(PGRAPHState *pg, void **data,
 void pgraph_vk_init_surfaces(PGRAPHState *pg);
 void pgraph_vk_finalize_surfaces(PGRAPHState *pg);
 void pgraph_vk_surface_flush(NV2AState *d);
+void pgraph_vk_surface_image_pool_init(PGRAPHVkState *r);
+void pgraph_vk_surface_image_pool_drain(PGRAPHVkState *r);
 void pgraph_vk_process_pending_downloads(NV2AState *d);
 void pgraph_vk_surface_download_if_dirty(NV2AState *d, SurfaceBinding *surface);
 SurfaceBinding *pgraph_vk_surface_get_within(NV2AState *d, hwaddr addr);
