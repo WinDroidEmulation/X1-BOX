@@ -1136,6 +1136,21 @@ static void create_texture(PGRAPHState *pg, int texture_idx)
         }
     }
 
+    if (!surface_to_texture && state.levels == 1) {
+        SurfaceBinding *shelved;
+        QTAILQ_FOREACH(shelved, &r->shelved_surfaces, entry) {
+            if (shelved->vram_addr == texture_vram_offset) {
+                bool compat = check_surface_to_texture_compatiblity(
+                    shelved, &state);
+                if (shelved->draw_dirty && compat) {
+                    surface = shelved;
+                    surface_to_texture = true;
+                    break;
+                }
+            }
+        }
+    }
+
     if (!surface_to_texture) {
         // FIXME: Restructure to support rendering surfaces to cubemap faces
 

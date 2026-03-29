@@ -422,6 +422,7 @@ typedef struct PGRAPHVkState {
 
     QTAILQ_HEAD(, SurfaceBinding) surfaces;
     QTAILQ_HEAD(, SurfaceBinding) invalid_surfaces;
+    QTAILQ_HEAD(, SurfaceBinding) shelved_surfaces;
     QTAILQ_HEAD(, PooledSurfaceImage) surface_image_pool;
     int surface_image_pool_count;
     SurfaceBinding *color_binding, *zeta_binding;

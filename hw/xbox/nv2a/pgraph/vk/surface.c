@@ -31,6 +31,9 @@
 
 const int num_invalid_surfaces_to_keep = 10;  // FIXME: Make automatic
 const int max_surface_frame_time_delta = 5;
+static const int max_shelved_surfaces = 20;
+
+static void destroy_surface_image(PGRAPHVkState *r, SurfaceBinding *surface);
 
 void pgraph_vk_set_surface_scale_factor(NV2AState *d, unsigned int scale)
 {
@@ -674,6 +677,43 @@ static void invalidate_surface(NV2AState *d, SurfaceBinding *surface)
     QTAILQ_INSERT_HEAD(&r->invalid_surfaces, surface, entry);
 }
 
+static void shelve_surface(NV2AState *d, SurfaceBinding *surface)
+{
+    PGRAPHVkState *r = d->pgraph.vk_renderer_state;
+
+    if (surface == r->color_binding) {
+        unbind_surface(d, true);
+    }
+    if (surface == r->zeta_binding) {
+        unbind_surface(d, false);
+    }
+
+    unregister_cpu_access_callback(d, surface);
+
+    QTAILQ_REMOVE(&r->surfaces, surface, entry);
+    QTAILQ_INSERT_HEAD(&r->shelved_surfaces, surface, entry);
+}
+
+static SurfaceBinding *get_shelved_surface(PGRAPHVkState *r,
+                                           hwaddr vram_addr,
+                                           SurfaceBinding *target)
+{
+    SurfaceBinding *surface, *next_surface;
+    QTAILQ_FOREACH_SAFE(surface, &r->shelved_surfaces, entry, next_surface) {
+        if (surface->vram_addr == vram_addr &&
+            surface->host_fmt.vk_format == target->host_fmt.vk_format &&
+            surface->color == target->color &&
+            surface->width == target->width &&
+            surface->height == target->height &&
+            surface->pitch == target->pitch) {
+            QTAILQ_REMOVE(&r->shelved_surfaces, surface, entry);
+            return surface;
+        }
+    }
+
+    return NULL;
+}
+
 static bool check_surfaces_overlap(const SurfaceBinding *surface,
                                    const SurfaceBinding *other_surface)
 {
@@ -694,6 +734,19 @@ static void invalidate_overlapping_surfaces(NV2AState *d,
                 other_surface->height, other_surface->pitch);
             pgraph_vk_surface_download_if_dirty(d, other_surface);
             invalidate_surface(d, other_surface);
+        }
+    }
+
+    QTAILQ_FOREACH_SAFE(other_surface, &r->shelved_surfaces, entry,
+                        next_surface) {
+        if (other_surface->vram_addr == surface->vram_addr) {
+            continue;
+        }
+        if (check_surfaces_overlap(surface, other_surface)) {
+            pgraph_vk_surface_download_if_dirty(d, other_surface);
+            QTAILQ_REMOVE(&r->shelved_surfaces, other_surface, entry);
+            destroy_surface_image(r, other_surface);
+            g_free(other_surface);
         }
     }
 }
@@ -1057,6 +1110,20 @@ static void expire_old_surfaces(NV2AState *d)
             trace_nv2a_pgraph_surface_evict_reason("old", s->vram_addr);
             pgraph_vk_surface_download_if_dirty(d, s);
             invalidate_surface(d, s);
+        }
+    }
+
+    int shelved_count = 0;
+    QTAILQ_FOREACH_SAFE(s, &r->shelved_surfaces, entry, next) {
+        int last_used = d->pgraph.frame_time - s->frame_time;
+        if (last_used >= max_surface_frame_time_delta ||
+            shelved_count >= max_shelved_surfaces) {
+            pgraph_vk_surface_download_if_dirty(d, s);
+            QTAILQ_REMOVE(&r->shelved_surfaces, s, entry);
+            destroy_surface_image(r, s);
+            g_free(s);
+        } else {
+            shelved_count++;
         }
     }
 }
@@ -1661,22 +1728,46 @@ static void update_surface_part(NV2AState *d, bool upload, bool color)
                 trace_nv2a_pgraph_surface_evict_reason(
                     "incompatible", surface->vram_addr);
                 compare_surfaces(surface, &target);
-                pgraph_vk_surface_download_if_dirty(d, surface);
-                invalidate_surface(d, surface);
+                pgraph_vk_finish(pg, VK_FINISH_REASON_SURFACE_DOWN);
+                if (surface->draw_dirty) {
+                    size_t region = (size_t)surface->pitch * surface->height;
+                    memset(d->vram_ptr + surface->vram_addr, 0xFF, region);
+                    memory_region_set_client_dirty(
+                        d->vram, surface->vram_addr, region,
+                        DIRTY_MEMORY_NV2A_TEX);
+                    memory_region_set_client_dirty(
+                        d->vram, surface->vram_addr, region,
+                        DIRTY_MEMORY_VGA);
+                }
+                shelve_surface(d, surface);
             }
         }
 
         if (should_create) {
-            surface = get_any_compatible_invalid_surface(r, &target);
+            bool unshelved = false;
+
+            surface = get_shelved_surface(r, target.vram_addr, &target);
             if (surface) {
                 migrate_surface_image(&target, surface);
+                unshelved = true;
             } else {
-                surface = g_malloc(sizeof(SurfaceBinding));
-                create_surface_image(pg, &target);
+                surface = get_any_compatible_invalid_surface(r, &target);
+                if (surface) {
+                    migrate_surface_image(&target, surface);
+                } else {
+                    surface = g_malloc(sizeof(SurfaceBinding));
+                    create_surface_image(pg, &target);
+                }
             }
 
             *surface = target;
             set_surface_label(pg, surface);
+
+            if (unshelved) {
+                surface->upload_pending = false;
+                surface->initialized = true;
+            }
+
             surface_put(d, surface);
 
             // FIXME: Refactor
@@ -1922,6 +2013,7 @@ void pgraph_vk_init_surfaces(PGRAPHState *pg)
 
     QTAILQ_INIT(&r->surfaces);
     QTAILQ_INIT(&r->invalid_surfaces);
+    QTAILQ_INIT(&r->shelved_surfaces);
     pgraph_vk_surface_image_pool_init(r);
 
     r->downloads_pending = false;
@@ -1958,6 +2050,12 @@ void pgraph_vk_surface_flush(NV2AState *d)
         //        investigate corruption issue
         pgraph_vk_surface_download_if_dirty(d, s);
         invalidate_surface(d, s);
+    }
+    QTAILQ_FOREACH_SAFE(s, &r->shelved_surfaces, entry, next) {
+        pgraph_vk_surface_download_if_dirty(d, s);
+        QTAILQ_REMOVE(&r->shelved_surfaces, s, entry);
+        destroy_surface_image(r, s);
+        g_free(s);
     }
     prune_invalid_surfaces(r, 0);
     pgraph_vk_surface_image_pool_drain(r);
