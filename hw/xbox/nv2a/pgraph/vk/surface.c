@@ -965,7 +965,11 @@ void pgraph_vk_upload_surface_data(NV2AState *d, SurfaceBinding *surface,
 
     nv2a_profile_inc_counter(NV2A_PROF_SURF_UPLOAD);
 
-    pgraph_vk_finish(pg, VK_FINISH_REASON_SURFACE_CREATE); // FIXME: SURFACE_UP
+    /*
+     * begin_nondraw_commands ends the active render pass, and the upload path
+     * transitions the image into TRANSFER_DST. That is sufficient
+     * synchronization here, so avoid the full finish stall.
+     */
 
     trace_nv2a_pgraph_surface_upload(
                  surface->color ? "COLOR" : "ZETA",

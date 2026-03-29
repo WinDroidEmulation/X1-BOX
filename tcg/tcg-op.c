@@ -298,6 +298,13 @@ void tcg_gen_mb(TCGBar mb_type)
 {
 #ifdef CONFIG_USER_ONLY
     bool parallel = tcg_ctx->gen_tb->cflags & CF_PARALLEL;
+#elif defined(XBOX)
+    /*
+     * Xbox is single-CPU and never sets CF_PARALLEL. Its device threads
+     * access guest memory via the memory API or under the BQL, so we can
+     * avoid emitting per-instruction barriers on this target.
+     */
+    bool parallel = tcg_ctx->gen_tb->cflags & CF_PARALLEL;
 #else
     /*
      * It is tempting to elide the barrier in a uniprocessor context.
