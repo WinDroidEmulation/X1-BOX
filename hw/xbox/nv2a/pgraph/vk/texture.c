@@ -805,7 +805,40 @@ static void copy_zeta_surface_to_texture(PGRAPHState *pg, SurfaceBinding *surfac
     texture->draw_time = surface->draw_time;
 }
 
-// FIXME: Should be able to skip the copy and sample the original surface image
+static void bind_surface_as_texture(PGRAPHState *pg, SurfaceBinding *surface,
+                                    TextureBinding *texture)
+{
+    PGRAPHVkState *r = pg->vk_renderer_state;
+
+    nv2a_profile_inc_counter(NV2A_PROF_SURF_TO_TEX);
+
+    VkCommandBuffer cmd = pgraph_vk_begin_nondraw_commands(pg);
+
+    VkImageMemoryBarrier barrier = {
+        .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+        .oldLayout = VK_IMAGE_LAYOUT_GENERAL,
+        .newLayout = VK_IMAGE_LAYOUT_GENERAL,
+        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .image = surface->image,
+        .subresourceRange = {
+            .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+            .baseMipLevel = 0,
+            .levelCount = 1,
+            .baseArrayLayer = 0,
+            .layerCount = 1,
+        },
+        .srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+        .dstAccessMask = VK_ACCESS_SHADER_READ_BIT,
+    };
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                         VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, NULL, 0,
+                         NULL, 1, &barrier);
+
+    pgraph_vk_end_nondraw_commands(pg, cmd);
+    texture->draw_time = surface->draw_time;
+}
+
 static void copy_surface_to_texture(PGRAPHState *pg, SurfaceBinding *surface,
                                     TextureBinding *texture)
 {
@@ -828,7 +861,7 @@ static void copy_surface_to_texture(PGRAPHState *pg, SurfaceBinding *surface,
 
     pgraph_vk_transition_image_layout(
         pg, cmd, surface->image, surface->host_fmt.vk_format,
-        surface->color ? VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL :
+        surface->color ? VK_IMAGE_LAYOUT_GENERAL :
                          VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
         VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
 
@@ -855,7 +888,7 @@ static void copy_surface_to_texture(PGRAPHState *pg, SurfaceBinding *surface,
     pgraph_vk_transition_image_layout(
         pg, cmd, surface->image, surface->host_fmt.vk_format,
         VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-        surface->color ? VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL :
+        surface->color ? VK_IMAGE_LAYOUT_GENERAL :
                          VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
 
     pgraph_vk_transition_image_layout(pg, cmd, texture->image, vkf.vk_format,
@@ -1119,6 +1152,8 @@ static void create_texture(PGRAPHState *pg, int texture_idx)
     bool possibly_dirty = false;
     bool possibly_dirty_checked = false;
     bool surface_to_texture = false;
+    r->tex_surface_direct[texture_idx] = false;
+    r->tex_surface_direct_views[texture_idx] = VK_NULL_HANDLE;
 
     // Check active surfaces to see if this texture was a render target
     SurfaceBinding *surface = pgraph_vk_surface_get(d, texture_vram_offset);
@@ -1217,8 +1252,13 @@ static void create_texture(PGRAPHState *pg, int texture_idx)
 
     if (binding_found) {
         if (surface_to_texture) {
-            // FIXME: Add draw time tracking
-            if (surface->draw_time != snode->draw_time) {
+            if (surface->color) {
+                if (surface->draw_time != snode->draw_time) {
+                    bind_surface_as_texture(pg, surface, snode);
+                }
+                r->tex_surface_direct[texture_idx] = true;
+                r->tex_surface_direct_views[texture_idx] = surface->image_view;
+            } else if (surface->draw_time != snode->draw_time) {
                 copy_surface_to_texture(pg, surface, snode);
             }
         } else {
@@ -1415,7 +1455,13 @@ static void create_texture(PGRAPHState *pg, int texture_idx)
     r->texture_bindings[texture_idx] = snode;
 
     if (surface_to_texture) {
-        copy_surface_to_texture(pg, surface, snode);
+        if (surface->color) {
+            bind_surface_as_texture(pg, surface, snode);
+            r->tex_surface_direct[texture_idx] = true;
+            r->tex_surface_direct_views[texture_idx] = surface->image_view;
+        } else {
+            copy_surface_to_texture(pg, surface, snode);
+        }
     } else {
         upload_texture_image(pg, texture_idx, snode);
         snode->draw_time = 0;
@@ -1429,7 +1475,8 @@ static bool check_textures_dirty(PGRAPHState *pg)
     PGRAPHVkState *r = pg->vk_renderer_state;
 
     for (int i = 0; i < NV2A_MAX_TEXTURES; i++) {
-        if (!r->texture_bindings[i] || pg->texture_dirty[i]) {
+        if (!r->texture_bindings[i] || pg->texture_dirty[i] ||
+            r->tex_surface_direct[i]) {
             return true;
         }
         if (r->texture_bindings[i] != &r->dummy_texture &&
@@ -1492,21 +1539,28 @@ void pgraph_vk_bind_textures(NV2AState *d)
                 r->texture_bindings[i] = &r->dummy_texture;
                 r->texture_bindings_changed = true;
             }
+            r->tex_surface_direct[i] = false;
+            r->tex_surface_direct_views[i] = VK_NULL_HANDLE;
             pg->texture_dirty[i] = false;
             continue;
         }
 
         if (!pg->texture_dirty[i] && r->texture_bindings[i] &&
             r->texture_bindings[i] != &r->dummy_texture &&
-            !r->texture_bindings[i]->possibly_dirty) {
+            !r->texture_bindings[i]->possibly_dirty &&
+            !r->tex_surface_direct[i]) {
             continue;
         }
 
         TextureBinding *prev_binding = r->texture_bindings[i];
+        bool prev_direct = r->tex_surface_direct[i];
+        VkImageView prev_direct_view = r->tex_surface_direct_views[i];
         create_texture(pg, i);
 
         pg->texture_dirty[i] = false; // FIXME: Move to renderer?
-        if (r->texture_bindings[i] != prev_binding) {
+        if (r->texture_bindings[i] != prev_binding ||
+            r->tex_surface_direct[i] != prev_direct ||
+            r->tex_surface_direct_views[i] != prev_direct_view) {
             r->texture_bindings_changed = true;
         }
     }
@@ -1641,6 +1695,8 @@ void pgraph_vk_finalize_textures(PGRAPHState *pg)
 
     for (int i = 0; i < NV2A_MAX_TEXTURES; i++) {
         r->texture_bindings[i] = NULL;
+        r->tex_surface_direct[i] = false;
+        r->tex_surface_direct_views[i] = VK_NULL_HANDLE;
     }
 
     destroy_dummy_texture(r);

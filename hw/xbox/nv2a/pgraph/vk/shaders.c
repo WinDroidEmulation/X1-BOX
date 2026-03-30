@@ -216,8 +216,12 @@ void pgraph_vk_update_descriptor_sets(PGRAPHState *pg)
     VkDescriptorImageInfo image_infos[NV2A_MAX_TEXTURES];
     for (int i = 0; i < NV2A_MAX_TEXTURES; i++) {
         image_infos[i] = (VkDescriptorImageInfo){
-            .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-            .imageView = r->texture_bindings[i]->image_view,
+            .imageLayout = r->tex_surface_direct[i]
+                ? VK_IMAGE_LAYOUT_GENERAL
+                : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+            .imageView = r->tex_surface_direct[i]
+                ? r->tex_surface_direct_views[i]
+                : r->texture_bindings[i]->image_view,
             .sampler = r->texture_bindings[i]->sampler,
         };
         descriptor_writes[2 + i] = (VkWriteDescriptorSet){
