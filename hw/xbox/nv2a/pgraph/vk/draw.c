@@ -32,6 +32,10 @@
 #include <android/log.h>
 #endif
 
+#if OPT_REORDER_SAFE_WINDOWS
+static bool g_xemu_draw_reorder = true;
+#endif
+
 void pgraph_vk_draw_begin(NV2AState *d)
 {
     PGRAPHState *pg = &d->pgraph;
@@ -48,6 +52,21 @@ void pgraph_vk_draw_begin(NV2AState *d)
     bool stencil_test =
         pgraph_reg_r(pg, NV_PGRAPH_CONTROL_1) & NV_PGRAPH_CONTROL_1_STENCIL_TEST_ENABLE;
     bool is_nop_draw = !(color_write || depth_test || stencil_test);
+
+#if OPT_REORDER_SAFE_WINDOWS
+    if (g_xemu_draw_reorder) {
+        PGRAPHVkState *r = pg->vk_renderer_state;
+        bool surface_shape_changed =
+            memcmp(&pg->surface_shape, &pg->last_surface_shape,
+                   sizeof(SurfaceShape)) != 0;
+        bool framebuffer_will_change =
+            surface_shape_changed &&
+            (pg->surface_shape.color_format || pg->surface_shape.zeta_format);
+        if (r->reorder_window.count > 0 && framebuffer_will_change) {
+            pgraph_vk_flush_reorder_window(d);
+        }
+    }
+#endif
 
     pgraph_vk_surface_update(d, true, true, depth_test || stencil_test);
 
@@ -1349,8 +1368,10 @@ static void sync_staging_buffer(PGRAPHState *pg, VkCommandBuffer cmd,
 
     switch (index_dst) {
     case BUFFER_INDEX:
-        dst_access_mask = VK_ACCESS_INDEX_READ_BIT;
-        dst_stage_mask = VK_PIPELINE_STAGE_VERTEX_INPUT_BIT;
+        dst_access_mask = VK_ACCESS_INDEX_READ_BIT |
+                          VK_ACCESS_INDIRECT_COMMAND_READ_BIT;
+        dst_stage_mask = VK_PIPELINE_STAGE_VERTEX_INPUT_BIT |
+                         VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT;
         break;
     case BUFFER_VERTEX_INLINE:
         dst_access_mask = VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT;
@@ -1472,6 +1493,32 @@ static void end_render_pass(PGRAPHVkState *r)
     }
 }
 
+#if OPT_REORDER_SAFE_WINDOWS
+static void flush_reorder_window_internal(NV2AState *d);
+static bool classify_draw_safe(PGRAPHState *pg);
+static bool try_snapshot_draw_arrays(NV2AState *d, ReorderWindowEntry *entry);
+static bool try_snapshot_inline_elements(NV2AState *d,
+                                         ReorderWindowEntry *entry);
+#endif
+
+typedef struct VertexBufferRemap {
+    uint16_t attributes;
+    size_t buffer_space_required;
+    struct {
+        VkDeviceAddress offset;
+        VkDeviceSize old_stride;
+        VkDeviceSize new_stride;
+    } map[NV2A_VERTEXSHADER_ATTRIBUTES];
+} VertexBufferRemap;
+
+static bool ensure_buffer_space(PGRAPHState *pg, int index, VkDeviceSize size);
+static VertexBufferRemap remap_unaligned_attributes(PGRAPHState *pg,
+                                                    uint32_t num_vertices);
+static void copy_remapped_attributes_to_inline_buffer(PGRAPHState *pg,
+                                                      VertexBufferRemap remap,
+                                                      uint32_t start_vertex,
+                                                      uint32_t num_vertices);
+
 const enum NV2A_PROF_COUNTERS_ENUM finish_reason_to_counter_enum[] = {
     [VK_FINISH_REASON_VERTEX_BUFFER_DIRTY] = NV2A_PROF_FINISH_VERTEX_BUFFER_DIRTY,
     [VK_FINISH_REASON_SURFACE_CREATE] = NV2A_PROF_FINISH_SURFACE_CREATE,
@@ -1487,6 +1534,14 @@ const enum NV2A_PROF_COUNTERS_ENUM finish_reason_to_counter_enum[] = {
 void pgraph_vk_finish(PGRAPHState *pg, FinishReason finish_reason)
 {
     PGRAPHVkState *r = pg->vk_renderer_state;
+
+#if OPT_REORDER_SAFE_WINDOWS
+    if (r->reorder_window.count > 0) {
+        NV2AState *d = container_of(pg, NV2AState, pgraph);
+        flush_reorder_window_internal(d);
+    }
+    r->reorder_window.active = false;
+#endif
 
     assert(!r->in_draw);
     assert(r->debug_depth == 0);
@@ -1852,6 +1907,63 @@ void pgraph_vk_draw_end(NV2AState *d)
         return;
     }
 
+#if OPT_REORDER_SAFE_WINDOWS
+    if (g_xemu_draw_reorder &&
+        (pg->draw_arrays_length || pg->inline_elements_length) &&
+        !pg->clearing) {
+        ReorderWindow *window = &r->reorder_window;
+        bool is_safe = classify_draw_safe(pg);
+
+        if (is_safe && r->framebuffer_dirty) {
+            is_safe = false;
+        }
+        if (is_safe && pg->zpass_pixel_count_enable) {
+            is_safe = false;
+        }
+
+        if (is_safe && window->count < REORDER_WINDOW_MAX) {
+            ReorderWindowEntry *entry = &window->entries[window->count];
+            bool ok = pg->draw_arrays_length ?
+                try_snapshot_draw_arrays(d, entry) :
+                try_snapshot_inline_elements(d, entry);
+            if (ok) {
+                entry->sequence_number = window->count;
+
+                int group = -1;
+                for (int i = 0; i < window->num_seen_pipelines; i++) {
+                    if (window->seen_pipelines[i] == entry->pipeline_binding) {
+                        group = window->seen_pipeline_group[i];
+                        break;
+                    }
+                }
+                if (group < 0) {
+                    if (window->num_seen_pipelines < REORDER_MAX_PIPELINES) {
+                        window->seen_pipelines[window->num_seen_pipelines] =
+                            entry->pipeline_binding;
+                        window->seen_pipeline_group[window->num_seen_pipelines] =
+                            window->next_group;
+                        window->num_seen_pipelines++;
+                    }
+                    group = window->next_group++;
+                }
+                entry->group_order = group;
+
+                window->count++;
+                window->active = true;
+                return;
+            }
+        }
+
+        if (window->count > 0) {
+            flush_reorder_window_internal(d);
+        }
+        window->active = false;
+    } else if (r->reorder_window.count > 0) {
+        flush_reorder_window_internal(d);
+        r->reorder_window.active = false;
+    }
+#endif
+
     pgraph_vk_flush_draw(d);
 
     pg->draw_time++;
@@ -1963,6 +2075,10 @@ void pgraph_vk_clear_surface(NV2AState *d, uint32_t parameter)
 {
     PGRAPHState *pg = &d->pgraph;
     PGRAPHVkState *r = pg->vk_renderer_state;
+
+#if OPT_REORDER_SAFE_WINDOWS
+    pgraph_vk_flush_reorder_window(d);
+#endif
 
     nv2a_profile_inc_counter(NV2A_PROF_CLEAR);
 
@@ -2148,6 +2264,547 @@ static void bind_inline_vertex_buffer(PGRAPHState *pg, VkDeviceSize offset)
     bind_vertex_buffer(pg, 0xffff, offset);
 }
 
+#if OPT_REORDER_SAFE_WINDOWS
+static bool check_rt_as_texture_hazard(PGRAPHState *pg)
+{
+    PGRAPHVkState *r = pg->vk_renderer_state;
+
+    for (int i = 0; i < NV2A_MAX_TEXTURES; i++) {
+        TextureBinding *binding = r->texture_bindings[i];
+        if (!binding || binding == &r->dummy_texture) {
+            continue;
+        }
+
+        hwaddr tex_start = binding->key.texture_vram_offset;
+        hwaddr tex_end = tex_start + binding->key.texture_length;
+
+        if (r->color_binding) {
+            hwaddr rt_start = r->color_binding->vram_addr;
+            hwaddr rt_end = rt_start + r->color_binding->size;
+            if (tex_start < rt_end && rt_start < tex_end) {
+                return true;
+            }
+        }
+
+        if (r->zeta_binding) {
+            hwaddr zt_start = r->zeta_binding->vram_addr;
+            hwaddr zt_end = zt_start + r->zeta_binding->size;
+            if (tex_start < zt_end && zt_start < tex_end) {
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
+static bool classify_draw_safe(PGRAPHState *pg)
+{
+    uint32_t control_0 = pgraph_reg_r(pg, NV_PGRAPH_CONTROL_0);
+    uint32_t blend = pgraph_reg_r(pg, NV_PGRAPH_BLEND);
+    uint32_t control_1 = pgraph_reg_r(pg, NV_PGRAPH_CONTROL_1);
+
+    if (blend & NV_PGRAPH_BLEND_EN) {
+        uint32_t src = GET_MASK(blend, NV_PGRAPH_BLEND_SFACTOR);
+        uint32_t dst = GET_MASK(blend, NV_PGRAPH_BLEND_DFACTOR);
+        if (src != NV_PGRAPH_BLEND_SFACTOR_ONE ||
+            dst != NV_PGRAPH_BLEND_DFACTOR_ZERO) {
+            return false;
+        }
+    }
+
+    if ((control_0 & (NV_PGRAPH_CONTROL_0_RED_WRITE_ENABLE |
+                      NV_PGRAPH_CONTROL_0_GREEN_WRITE_ENABLE |
+                      NV_PGRAPH_CONTROL_0_BLUE_WRITE_ENABLE |
+                      NV_PGRAPH_CONTROL_0_ALPHA_WRITE_ENABLE)) !=
+        (NV_PGRAPH_CONTROL_0_RED_WRITE_ENABLE |
+         NV_PGRAPH_CONTROL_0_GREEN_WRITE_ENABLE |
+         NV_PGRAPH_CONTROL_0_BLUE_WRITE_ENABLE |
+         NV_PGRAPH_CONTROL_0_ALPHA_WRITE_ENABLE)) {
+        return false;
+    }
+
+    if (!(control_0 & NV_PGRAPH_CONTROL_0_ZENABLE) ||
+        !(control_0 & NV_PGRAPH_CONTROL_0_ZWRITEENABLE)) {
+        return false;
+    }
+
+    uint32_t zfunc = GET_MASK(control_0, NV_PGRAPH_CONTROL_0_ZFUNC);
+    if (zfunc != NV_PGRAPH_CONTROL_0_ZFUNC_LESS &&
+        zfunc != NV_PGRAPH_CONTROL_0_ZFUNC_LEQUAL) {
+        return false;
+    }
+
+    if (control_1 & NV_PGRAPH_CONTROL_1_STENCIL_TEST_ENABLE) {
+        return false;
+    }
+
+    if (control_0 & NV_PGRAPH_CONTROL_0_ALPHATESTENABLE) {
+        uint32_t afunc = GET_MASK(control_0, NV_PGRAPH_CONTROL_0_ALPHAFUNC);
+        uint32_t aref = GET_MASK(control_0, NV_PGRAPH_CONTROL_0_ALPHAREF);
+        bool safe_alpha = (afunc == ALPHA_FUNC_ALWAYS) ||
+                          (afunc == ALPHA_FUNC_GREATER && aref == 0);
+        if (!safe_alpha) {
+            return false;
+        }
+    }
+
+    if (check_rt_as_texture_hazard(pg)) {
+        return false;
+    }
+
+    return true;
+}
+
+static bool reorder_uses_bindless_direct_surface_textures(PGRAPHVkState *r)
+{
+#if OPT_BINDLESS_TEXTURES
+    if (r->bindless_textures_supported) {
+        for (int i = 0; i < NV2A_MAX_TEXTURES; i++) {
+            if (r->tex_surface_direct[i]) {
+                return true;
+            }
+        }
+    }
+#endif
+    return false;
+}
+
+static void snapshot_vertex_buffers(PGRAPHState *pg, ReorderWindowEntry *entry,
+                                    uint16_t inline_map, VkDeviceSize offset)
+{
+    PGRAPHVkState *r = pg->vk_renderer_state;
+
+    entry->num_vertex_bindings = r->num_active_vertex_binding_descriptions;
+    for (int i = 0; i < entry->num_vertex_bindings; i++) {
+        int attr_idx = r->vertex_attribute_descriptions[i].location;
+        int buffer_idx = (inline_map & (1 << attr_idx)) ? BUFFER_VERTEX_INLINE :
+                                                          BUFFER_VERTEX_RAM;
+        entry->vertex_buffers[i] = r->storage_buffers[buffer_idx].buffer;
+        entry->vertex_offsets[i] =
+            offset + r->vertex_attribute_offsets[attr_idx];
+    }
+}
+
+static void snapshot_draw_state(PGRAPHState *pg, ReorderWindowEntry *entry)
+{
+    unsigned int vp_width = pg->surface_binding_dim.width;
+    unsigned int vp_height = pg->surface_binding_dim.height;
+    pgraph_apply_scaling_factor(pg, &vp_width, &vp_height);
+    entry->viewport = (VkViewport){
+        .width = vp_width,
+        .height = vp_height,
+        .minDepth = 0.0f,
+        .maxDepth = 1.0f,
+    };
+
+    unsigned int xmin = pg->surface_shape.clip_x;
+    unsigned int ymin = pg->surface_shape.clip_y;
+    unsigned int scissor_width = pg->surface_shape.clip_width;
+    unsigned int scissor_height = pg->surface_shape.clip_height;
+
+    pgraph_apply_anti_aliasing_factor(pg, &xmin, &ymin);
+    pgraph_apply_anti_aliasing_factor(pg, &scissor_width, &scissor_height);
+    pgraph_apply_scaling_factor(pg, &xmin, &ymin);
+    pgraph_apply_scaling_factor(pg, &scissor_width, &scissor_height);
+
+    entry->scissor = (VkRect2D){
+        .offset = { .x = xmin, .y = ymin },
+        .extent = { .width = scissor_width, .height = scissor_height },
+    };
+}
+
+static void snapshot_push_constants(PGRAPHState *pg, ReorderWindowEntry *entry)
+{
+    PGRAPHVkState *r = pg->vk_renderer_state;
+    entry->use_push_constants = can_push_vertex_attr_values(r);
+    entry->num_push_values = 0;
+
+    if (!entry->use_push_constants || !r->shader_binding) {
+        return;
+    }
+
+    float values[NV2A_VERTEXSHADER_ATTRIBUTES][4];
+    int num_uniform_attrs = 0;
+    pgraph_get_inline_values(pg, r->shader_binding->state.vsh.uniform_attrs,
+                             values, &num_uniform_attrs);
+    entry->num_push_values = num_uniform_attrs;
+    if (num_uniform_attrs > 0) {
+        memcpy(entry->push_values, values,
+               num_uniform_attrs * 4 * sizeof(float));
+    }
+}
+
+static void snapshot_texture_indices(PGRAPHState *pg, ReorderWindowEntry *entry)
+{
+    PGRAPHVkState *r = pg->vk_renderer_state;
+
+    entry->use_bindless_textures = false;
+#if OPT_BINDLESS_TEXTURES
+    entry->use_bindless_textures = r->bindless_textures_supported;
+    if (entry->use_bindless_textures) {
+        memcpy(entry->tex_bindless_indices, r->tex_bindless_indices,
+               sizeof(entry->tex_bindless_indices));
+    }
+#endif
+}
+
+static bool try_snapshot_draw_arrays(NV2AState *d, ReorderWindowEntry *entry)
+{
+    PGRAPHState *pg = &d->pgraph;
+    PGRAPHVkState *r = pg->vk_renderer_state;
+
+    if (!(r->color_binding || r->zeta_binding)) {
+        return false;
+    }
+
+    nv2a_profile_inc_counter(NV2A_PROF_DRAW_ARRAYS);
+    r->num_vertex_ram_buffer_syncs = 0;
+
+    PrimAssemblyState assembly = {
+        .primitive_mode = pg->primitive_mode,
+        .polygon_mode = (enum ShaderPolygonMode)GET_MASK(
+            pgraph_reg_r(pg, NV_PGRAPH_SETUPRASTER),
+            NV_PGRAPH_SETUPRASTER_FRONTFACEMODE),
+        .last_provoking = GET_MASK(pgraph_reg_r(pg, NV_PGRAPH_CONTROL_3),
+                                   NV_PGRAPH_CONTROL_3_PROVOKING_VERTEX) ==
+                          NV_PGRAPH_CONTROL_3_PROVOKING_VERTEX_LAST,
+        .flat_shading = GET_MASK(pgraph_reg_r(pg, NV_PGRAPH_CONTROL_3),
+                                 NV_PGRAPH_CONTROL_3_SHADEMODE) ==
+                        NV_PGRAPH_CONTROL_3_SHADEMODE_FLAT,
+    };
+
+    pgraph_vk_bind_vertex_attributes(d, pg->draw_arrays_min_start,
+                                     pg->draw_arrays_max_count - 1, false, 0,
+                                     pg->draw_arrays_max_count - 1);
+
+    uint32_t max_element = 0;
+    for (int i = 0; i < pg->draw_arrays_length; i++) {
+        max_element = MAX(max_element, pg->draw_arrays_start[i] +
+                                           pg->draw_arrays_count[i]);
+    }
+
+    sync_vertex_ram_buffer(pg);
+    VertexBufferRemap remap = remap_unaligned_attributes(pg, max_element);
+
+    PrimRewrite prim_rw = pgraph_prim_rewrite_ranges(
+        &r->prim_rewrite_buf, assembly, pg->draw_arrays_start,
+        pg->draw_arrays_count, pg->draw_arrays_length);
+
+    if (prim_rw.num_indices > 0) {
+        ensure_buffer_space(pg, BUFFER_INDEX_STAGING,
+                            prim_rw.num_indices * sizeof(uint32_t));
+    } else if (pg->draw_arrays_length > 1) {
+        ensure_buffer_space(pg, BUFFER_INDEX_STAGING,
+                            pg->draw_arrays_length *
+                                sizeof(VkDrawIndirectCommand));
+    }
+
+    begin_pre_draw(pg);
+    if (reorder_uses_bindless_direct_surface_textures(r) ||
+        !r->pipeline_binding || r->descriptor_set_index == 0) {
+        return false;
+    }
+
+    copy_remapped_attributes_to_inline_buffer(pg, remap, 0, max_element);
+
+    entry->pipeline_binding = r->pipeline_binding;
+    entry->layout = r->pipeline_binding->layout;
+    entry->descriptor_set = r->descriptor_sets[r->descriptor_set_index - 1];
+    entry->has_dynamic_line_width = r->pipeline_binding->has_dynamic_line_width;
+    if (entry->has_dynamic_line_width) {
+        entry->line_width =
+            clamp_line_width_to_device_limits(pg, pg->surface_scale_factor);
+    }
+
+    snapshot_vertex_buffers(pg, entry, remap.attributes, 0);
+    snapshot_draw_state(pg, entry);
+    snapshot_push_constants(pg, entry);
+    snapshot_texture_indices(pg, entry);
+
+    if (prim_rw.num_indices > 0) {
+        entry->draw_mode = RW_DRAW_INDEXED;
+        entry->draw_count = prim_rw.num_indices;
+        entry->index_indirect_offset = pgraph_vk_update_index_buffer(
+            pg, prim_rw.indices, prim_rw.num_indices * sizeof(uint32_t));
+    } else if (pg->draw_arrays_length > 1) {
+        VkDrawIndirectCommand cmds[pg->draw_arrays_length];
+        for (int i = 0; i < pg->draw_arrays_length; i++) {
+            cmds[i] = (VkDrawIndirectCommand){
+                .vertexCount = pg->draw_arrays_count[i],
+                .instanceCount = 1,
+                .firstVertex = pg->draw_arrays_start[i],
+                .firstInstance = 0,
+            };
+        }
+        entry->draw_mode = RW_DRAW_INDIRECT;
+        entry->draw_count = pg->draw_arrays_length;
+        entry->index_indirect_offset = pgraph_vk_update_index_buffer(
+            pg, cmds, sizeof(cmds));
+    } else {
+        entry->draw_mode = RW_DRAW_DIRECT;
+        entry->draw_count = 1;
+        entry->vertex_count = pg->draw_arrays_count[0];
+        entry->first_vertex = pg->draw_arrays_start[0];
+    }
+
+    uint32_t control_0 = pgraph_reg_r(pg, NV_PGRAPH_CONTROL_0);
+    entry->color_write =
+        (control_0 & NV_PGRAPH_CONTROL_0_ALPHA_WRITE_ENABLE) ||
+        (control_0 & NV_PGRAPH_CONTROL_0_RED_WRITE_ENABLE) ||
+        (control_0 & NV_PGRAPH_CONTROL_0_GREEN_WRITE_ENABLE) ||
+        (control_0 & NV_PGRAPH_CONTROL_0_BLUE_WRITE_ENABLE);
+    entry->depth_test = !!(control_0 & NV_PGRAPH_CONTROL_0_ZENABLE);
+    entry->stencil_test =
+        !!(pgraph_reg_r(pg, NV_PGRAPH_CONTROL_1) &
+           NV_PGRAPH_CONTROL_1_STENCIL_TEST_ENABLE);
+
+    return true;
+}
+
+static bool try_snapshot_inline_elements(NV2AState *d,
+                                         ReorderWindowEntry *entry)
+{
+    PGRAPHState *pg = &d->pgraph;
+    PGRAPHVkState *r = pg->vk_renderer_state;
+
+    if (!(r->color_binding || r->zeta_binding)) {
+        return false;
+    }
+
+    nv2a_profile_inc_counter(NV2A_PROF_INLINE_ELEMENTS);
+
+    PrimAssemblyState assembly = {
+        .primitive_mode = pg->primitive_mode,
+        .polygon_mode = (enum ShaderPolygonMode)GET_MASK(
+            pgraph_reg_r(pg, NV_PGRAPH_SETUPRASTER),
+            NV_PGRAPH_SETUPRASTER_FRONTFACEMODE),
+        .last_provoking = GET_MASK(pgraph_reg_r(pg, NV_PGRAPH_CONTROL_3),
+                                   NV_PGRAPH_CONTROL_3_PROVOKING_VERTEX) ==
+                          NV_PGRAPH_CONTROL_3_PROVOKING_VERTEX_LAST,
+        .flat_shading = GET_MASK(pgraph_reg_r(pg, NV_PGRAPH_CONTROL_3),
+                                 NV_PGRAPH_CONTROL_3_SHADEMODE) ==
+                        NV_PGRAPH_CONTROL_3_SHADEMODE_FLAT,
+    };
+
+    uint32_t *draw_indices = pg->inline_elements;
+    unsigned int draw_index_count = pg->inline_elements_length;
+    PrimRewrite prim_rw = pgraph_prim_rewrite_indexed(
+        &r->prim_rewrite_buf, assembly, pg->inline_elements,
+        pg->inline_elements_length);
+    if (prim_rw.num_indices > 0) {
+        draw_indices = prim_rw.indices;
+        draw_index_count = prim_rw.num_indices;
+    }
+
+    size_t index_data_size = draw_index_count * sizeof(uint32_t);
+    ensure_buffer_space(pg, BUFFER_INDEX_STAGING, index_data_size);
+
+    uint32_t min_element = UINT32_MAX;
+    uint32_t max_element = 0;
+    for (unsigned int i = 0; i < draw_index_count; i++) {
+        max_element = MAX(draw_indices[i], max_element);
+        min_element = MIN(draw_indices[i], min_element);
+    }
+
+    pgraph_vk_bind_vertex_attributes(
+        d, min_element, max_element, false, 0,
+        draw_indices[draw_index_count - 1]);
+    sync_vertex_ram_buffer(pg);
+    VertexBufferRemap remap = remap_unaligned_attributes(pg, max_element + 1);
+
+    begin_pre_draw(pg);
+    if (reorder_uses_bindless_direct_surface_textures(r) ||
+        !r->pipeline_binding || r->descriptor_set_index == 0) {
+        return false;
+    }
+
+    copy_remapped_attributes_to_inline_buffer(pg, remap, 0, max_element + 1);
+
+    entry->pipeline_binding = r->pipeline_binding;
+    entry->layout = r->pipeline_binding->layout;
+    entry->descriptor_set = r->descriptor_sets[r->descriptor_set_index - 1];
+    entry->has_dynamic_line_width = r->pipeline_binding->has_dynamic_line_width;
+    if (entry->has_dynamic_line_width) {
+        entry->line_width =
+            clamp_line_width_to_device_limits(pg, pg->surface_scale_factor);
+    }
+
+    snapshot_vertex_buffers(pg, entry, remap.attributes, 0);
+    snapshot_draw_state(pg, entry);
+    snapshot_push_constants(pg, entry);
+    snapshot_texture_indices(pg, entry);
+
+    entry->draw_mode = RW_DRAW_INDEXED;
+    entry->draw_count = draw_index_count;
+    entry->index_indirect_offset = pgraph_vk_update_index_buffer(
+        pg, draw_indices, index_data_size);
+
+    uint32_t control_0 = pgraph_reg_r(pg, NV_PGRAPH_CONTROL_0);
+    entry->color_write =
+        (control_0 & NV_PGRAPH_CONTROL_0_ALPHA_WRITE_ENABLE) ||
+        (control_0 & NV_PGRAPH_CONTROL_0_RED_WRITE_ENABLE) ||
+        (control_0 & NV_PGRAPH_CONTROL_0_GREEN_WRITE_ENABLE) ||
+        (control_0 & NV_PGRAPH_CONTROL_0_BLUE_WRITE_ENABLE);
+    entry->depth_test = !!(control_0 & NV_PGRAPH_CONTROL_0_ZENABLE);
+    entry->stencil_test =
+        !!(pgraph_reg_r(pg, NV_PGRAPH_CONTROL_1) &
+           NV_PGRAPH_CONTROL_1_STENCIL_TEST_ENABLE);
+
+    return true;
+}
+
+static int compare_reorder_entries(const void *a, const void *b)
+{
+    const ReorderWindowEntry *left = a;
+    const ReorderWindowEntry *right = b;
+
+    if (left->group_order < right->group_order) {
+        return -1;
+    }
+    if (left->group_order > right->group_order) {
+        return 1;
+    }
+    return left->sequence_number - right->sequence_number;
+}
+
+static void emit_reorder_entry(PGRAPHState *pg, ReorderWindowEntry *entry,
+                               PipelineBinding *prev_pipeline)
+{
+    PGRAPHVkState *r = pg->vk_renderer_state;
+    bool pipeline_changed = (entry->pipeline_binding != prev_pipeline);
+
+    if (!r->in_render_pass) {
+        begin_render_pass(pg);
+        pipeline_changed = true;
+    }
+
+    if (pipeline_changed) {
+        nv2a_profile_inc_counter(NV2A_PROF_PIPELINE_BIND);
+        vkCmdBindPipeline(r->command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                          entry->pipeline_binding->pipeline);
+        entry->pipeline_binding->draw_time = pg->draw_time;
+        vkCmdSetViewport(r->command_buffer, 0, 1, &entry->viewport);
+        vkCmdSetScissor(r->command_buffer, 0, 1, &entry->scissor);
+        if (entry->has_dynamic_line_width) {
+            vkCmdSetLineWidth(r->command_buffer, entry->line_width);
+        }
+    }
+
+#if OPT_BINDLESS_TEXTURES
+    if (entry->use_bindless_textures) {
+        vkCmdBindDescriptorSets(r->command_buffer,
+                                VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                entry->layout, 0, 1,
+                                &r->bindless_descriptor_set, 0, NULL);
+        r->bindless_set_bound = true;
+        vkCmdPushConstants(r->command_buffer, entry->layout,
+                           VK_SHADER_STAGE_FRAGMENT_BIT, r->tex_push_offset,
+                           sizeof(entry->tex_bindless_indices),
+                           entry->tex_bindless_indices);
+    }
+#endif
+
+    vkCmdBindDescriptorSets(r->command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                            entry->layout,
+                            entry->use_bindless_textures ? 1 : 0, 1,
+                            &entry->descriptor_set, 0, NULL);
+
+    if (entry->use_push_constants && entry->num_push_values > 0) {
+#if OPT_BINDLESS_TEXTURES
+        uint32_t vertex_push_offset =
+            entry->use_bindless_textures && r->tex_push_offset == 0
+                ? NV2A_MAX_TEXTURES * sizeof(uint32_t)
+                : 0;
+#else
+        uint32_t vertex_push_offset = 0;
+#endif
+        vkCmdPushConstants(r->command_buffer, entry->layout,
+                           VK_SHADER_STAGE_VERTEX_BIT, vertex_push_offset,
+                           entry->num_push_values * 4 * sizeof(float),
+                           entry->push_values);
+    }
+
+    if (entry->num_vertex_bindings > 0) {
+        vkCmdBindVertexBuffers(r->command_buffer, 0,
+                               entry->num_vertex_bindings,
+                               entry->vertex_buffers, entry->vertex_offsets);
+    }
+
+    switch (entry->draw_mode) {
+    case RW_DRAW_INDEXED:
+        vkCmdBindIndexBuffer(r->command_buffer,
+                             r->storage_buffers[BUFFER_INDEX].buffer,
+                             entry->index_indirect_offset,
+                             VK_INDEX_TYPE_UINT32);
+        vkCmdDrawIndexed(r->command_buffer, entry->draw_count, 1, 0, 0, 0);
+        break;
+    case RW_DRAW_INDIRECT:
+        vkCmdDrawIndirect(r->command_buffer,
+                          r->storage_buffers[BUFFER_INDEX].buffer,
+                          entry->index_indirect_offset, entry->draw_count,
+                          sizeof(VkDrawIndirectCommand));
+        break;
+    case RW_DRAW_DIRECT:
+        vkCmdDraw(r->command_buffer, entry->vertex_count, 1,
+                  entry->first_vertex, 0);
+        break;
+    }
+}
+
+static void flush_reorder_window_internal(NV2AState *d)
+{
+    PGRAPHState *pg = &d->pgraph;
+    PGRAPHVkState *r = pg->vk_renderer_state;
+    ReorderWindow *window = &r->reorder_window;
+
+    if (window->count == 0) {
+        return;
+    }
+
+    qsort(window->entries, window->count, sizeof(window->entries[0]),
+          compare_reorder_entries);
+
+    pgraph_vk_ensure_command_buffer(pg);
+
+    PipelineBinding *prev_pipeline = NULL;
+    for (int i = 0; i < window->count; i++) {
+        ReorderWindowEntry *entry = &window->entries[i];
+        emit_reorder_entry(pg, entry, prev_pipeline);
+        prev_pipeline = entry->pipeline_binding;
+
+        pg->draw_time++;
+        if (r->color_binding && entry->color_write) {
+            r->color_binding->draw_time = pg->draw_time;
+        }
+        if (r->zeta_binding && (entry->depth_test || entry->stencil_test)) {
+            r->zeta_binding->draw_time = pg->draw_time;
+        }
+
+        pgraph_vk_set_surface_dirty(pg, entry->color_write,
+                                    entry->depth_test || entry->stencil_test);
+    }
+
+    r->pipeline_binding = prev_pipeline;
+    r->pipeline_binding_changed = false;
+    window->count = 0;
+    window->active = false;
+    window->num_seen_pipelines = 0;
+    window->next_group = 0;
+}
+#endif
+
+void pgraph_vk_flush_reorder_window(NV2AState *d)
+{
+#if OPT_REORDER_SAFE_WINDOWS
+    PGRAPHVkState *r = d->pgraph.vk_renderer_state;
+    if (r->reorder_window.count > 0) {
+        flush_reorder_window_internal(d);
+    }
+    r->reorder_window.active = false;
+#endif
+}
+
 void pgraph_vk_set_surface_dirty(PGRAPHState *pg, bool color, bool zeta)
 {
     NV2A_DPRINTF("pgraph_set_surface_dirty(%d, %d) -- %d %d\n", color, zeta,
@@ -2221,16 +2878,6 @@ static void get_size_and_count_for_format(VkFormat fmt, size_t *size, size_t *co
     *size = table[fmt].size;
     *count = table[fmt].count;
 }
-
-typedef struct VertexBufferRemap {
-    uint16_t attributes;
-    size_t buffer_space_required;
-    struct {
-        VkDeviceAddress offset;
-        VkDeviceSize old_stride;
-        VkDeviceSize new_stride;
-    } map[NV2A_VERTEXSHADER_ATTRIBUTES];
-} VertexBufferRemap;
 
 static VertexBufferRemap remap_unaligned_attributes(PGRAPHState *pg,
                                                     uint32_t num_vertices)

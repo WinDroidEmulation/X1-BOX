@@ -689,6 +689,13 @@ static void copy_zeta_surface_to_texture(PGRAPHState *pg, SurfaceBinding *surfac
     TextureShape *state = &texture->key.state;
     VkColorFormatInfo vkf = kelvin_color_format_vk_map[state->color_format];
 
+#if OPT_REORDER_SAFE_WINDOWS
+    if (r->reorder_window.count > 0) {
+        NV2AState *d = container_of(pg, NV2AState, pgraph);
+        pgraph_vk_flush_reorder_window(d);
+    }
+#endif
+
     bool use_compute_to_convert_depth_stencil =
         surface->host_fmt.vk_format == VK_FORMAT_D24_UNORM_S8_UINT ||
         surface->host_fmt.vk_format == VK_FORMAT_D32_SFLOAT_S8_UINT;
@@ -1215,6 +1222,13 @@ static void copy_surface_to_texture(PGRAPHState *pg, SurfaceBinding *surface,
     PGRAPHVkState *r = pg->vk_renderer_state;
     TextureShape *state = &texture->key.state;
     VkColorFormatInfo vkf = kelvin_color_format_vk_map[state->color_format];
+
+#if OPT_REORDER_SAFE_WINDOWS
+    if (r->reorder_window.count > 0) {
+        NV2AState *d = container_of(pg, NV2AState, pgraph);
+        pgraph_vk_flush_reorder_window(d);
+    }
+#endif
 
     nv2a_profile_inc_counter(NV2A_PROF_SURF_TO_TEX);
 

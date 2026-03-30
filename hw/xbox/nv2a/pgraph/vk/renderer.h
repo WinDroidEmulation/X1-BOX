@@ -47,6 +47,8 @@
 #define MAX_FRAMEBUFFERS 256
 #define FB_CACHE_MAX 32
 #define OPT_BINDLESS_TEXTURES 1
+#define OPT_REORDER_SAFE_WINDOWS 1
+#define REORDER_WINDOW_MAX 64
 #define MAX_BINDLESS_TEXTURES 1024
 #define BINDLESS_STAGE_SLOT_BASE (MAX_BINDLESS_TEXTURES - NV2A_MAX_TEXTURES)
 
@@ -255,6 +257,64 @@ typedef struct TextureBinding {
     uint32_t bindless_binding;
 #endif
 } TextureBinding;
+
+#if OPT_REORDER_SAFE_WINDOWS
+typedef enum ReorderDrawMode {
+    RW_DRAW_INDEXED,
+    RW_DRAW_INDIRECT,
+    RW_DRAW_DIRECT,
+} ReorderDrawMode;
+
+typedef struct ReorderWindowEntry {
+    PipelineBinding *pipeline_binding;
+    VkDescriptorSet descriptor_set;
+
+    VkBuffer vertex_buffers[NV2A_VERTEXSHADER_ATTRIBUTES];
+    VkDeviceSize vertex_offsets[NV2A_VERTEXSHADER_ATTRIBUTES];
+    int num_vertex_bindings;
+
+    ReorderDrawMode draw_mode;
+    VkDeviceSize index_indirect_offset;
+    uint32_t draw_count;
+    uint32_t vertex_count;
+    int32_t first_vertex;
+
+    bool has_dynamic_line_width;
+    float line_width;
+
+    VkViewport viewport;
+    VkRect2D scissor;
+
+    float push_values[NV2A_VERTEXSHADER_ATTRIBUTES * 4];
+    int num_push_values;
+    bool use_push_constants;
+    bool use_bindless_textures;
+#if OPT_BINDLESS_TEXTURES
+    uint32_t tex_bindless_indices[NV2A_MAX_TEXTURES];
+#endif
+    VkPipelineLayout layout;
+
+    int sequence_number;
+    int group_order;
+
+    bool color_write;
+    bool depth_test;
+    bool stencil_test;
+} ReorderWindowEntry;
+
+#define REORDER_MAX_PIPELINES 32
+
+typedef struct ReorderWindow {
+    ReorderWindowEntry entries[REORDER_WINDOW_MAX];
+    int count;
+    bool active;
+
+    PipelineBinding *seen_pipelines[REORDER_MAX_PIPELINES];
+    int seen_pipeline_group[REORDER_MAX_PIPELINES];
+    int num_seen_pipelines;
+    int next_group;
+} ReorderWindow;
+#endif
 
 typedef struct QueryReport {
     QSIMPLEQ_ENTRY(QueryReport) entry;
@@ -491,6 +551,10 @@ typedef struct PGRAPHVkState {
     bool shader_bindings_changed;
     bool use_push_constants_for_uniform_attrs;
 
+#if OPT_REORDER_SAFE_WINDOWS
+    ReorderWindow reorder_window;
+#endif
+
     Lru shader_module_cache;
     ShaderModuleCacheEntry *shader_module_cache_entries;
     size_t shader_module_cache_target;
@@ -685,6 +749,7 @@ void pgraph_vk_draw_begin(NV2AState *d);
 void pgraph_vk_draw_end(NV2AState *d);
 void pgraph_vk_finish(PGRAPHState *pg, FinishReason why);
 void pgraph_vk_flush_draw(NV2AState *d);
+void pgraph_vk_flush_reorder_window(NV2AState *d);
 void pgraph_vk_begin_command_buffer(PGRAPHState *pg);
 void pgraph_vk_ensure_command_buffer(PGRAPHState *pg);
 void pgraph_vk_ensure_not_in_render_pass(PGRAPHState *pg);

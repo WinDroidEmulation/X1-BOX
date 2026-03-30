@@ -2029,6 +2029,9 @@ void pgraph_vk_surface_update(NV2AState *d, bool upload, bool color_write,
             update_surface_part(d, true, false);
         }
     } else {
+#if OPT_REORDER_SAFE_WINDOWS
+        pgraph_vk_flush_reorder_window(d);
+#endif
         if ((color_write || pg->surface_color.write_enabled_cache)
             && pg->surface_color.draw_dirty) {
             update_surface_part(d, false, true);
