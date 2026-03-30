@@ -147,6 +147,142 @@ void pgraph_vk_download_surfaces_in_range_if_dirty(PGRAPHState *pg,
     }
 }
 
+#ifdef __ANDROID__
+static uint8_t android_vk_surface_expand_5_to_8(uint8_t value)
+{
+    return (value << 3) | (value >> 2);
+}
+
+static bool android_vk_surface_uses_host_conversion(const SurfaceBinding *surface)
+{
+    if (!surface || !surface->color) {
+        return false;
+    }
+
+    switch (surface->shape.color_format) {
+    case NV097_SET_SURFACE_FORMAT_COLOR_LE_X1R5G5B5_Z1R5G5B5:
+    case NV097_SET_SURFACE_FORMAT_COLOR_LE_X1R5G5B5_O1R5G5B5:
+    case NV097_SET_SURFACE_FORMAT_COLOR_LE_X8R8G8B8_Z8R8G8B8:
+    case NV097_SET_SURFACE_FORMAT_COLOR_LE_X8R8G8B8_O8R8G8B8:
+    case NV097_SET_SURFACE_FORMAT_COLOR_LE_A8R8G8B8:
+        return true;
+    default:
+        return false;
+    }
+}
+
+static void android_vk_surface_convert_to_host(const SurfaceBinding *surface,
+                                               const uint8_t *src,
+                                               unsigned int width,
+                                               unsigned int height,
+                                               unsigned int src_stride,
+                                               uint8_t *dst,
+                                               unsigned int dst_stride)
+{
+    unsigned int x, y;
+
+    switch (surface->shape.color_format) {
+    case NV097_SET_SURFACE_FORMAT_COLOR_LE_X1R5G5B5_Z1R5G5B5:
+    case NV097_SET_SURFACE_FORMAT_COLOR_LE_X1R5G5B5_O1R5G5B5:
+        for (y = 0; y < height; y++) {
+            const uint8_t *src_row = src + y * src_stride;
+            uint8_t *dst_row = dst + y * dst_stride;
+
+            switch (surface->host_fmt.vk_format) {
+            case VK_FORMAT_A1R5G5B5_UNORM_PACK16:
+                for (x = 0; x < width; x++) {
+                    uint16_t pixel = lduw_le_p(src_row + x * 2) | 0x8000;
+                    stw_le_p(dst_row + x * 2, pixel);
+                }
+                break;
+            case VK_FORMAT_R5G6B5_UNORM_PACK16:
+                for (x = 0; x < width; x++) {
+                    uint16_t pixel = lduw_le_p(src_row + x * 2);
+                    uint16_t r5 = (pixel >> 10) & 0x1F;
+                    uint16_t g5 = (pixel >> 5) & 0x1F;
+                    uint16_t b5 = pixel & 0x1F;
+                    uint16_t packed =
+                        (r5 << 11) | (((g5 << 1) | (g5 >> 4)) << 5) | b5;
+                    stw_le_p(dst_row + x * 2, packed);
+                }
+                break;
+            case VK_FORMAT_B8G8R8A8_UNORM:
+            case VK_FORMAT_R8G8B8A8_UNORM:
+                for (x = 0; x < width; x++) {
+                    uint16_t pixel = lduw_le_p(src_row + x * 2);
+                    uint8_t r =
+                        android_vk_surface_expand_5_to_8((pixel >> 10) & 0x1F);
+                    uint8_t g =
+                        android_vk_surface_expand_5_to_8((pixel >> 5) & 0x1F);
+                    uint8_t b = android_vk_surface_expand_5_to_8(pixel & 0x1F);
+                    uint8_t *out = dst_row + x * 4;
+
+                    if (surface->host_fmt.vk_format ==
+                        VK_FORMAT_B8G8R8A8_UNORM) {
+                        out[0] = b;
+                        out[1] = g;
+                        out[2] = r;
+                        out[3] = 0xFF;
+                    } else {
+                        out[0] = r;
+                        out[1] = g;
+                        out[2] = b;
+                        out[3] = 0xFF;
+                    }
+                }
+                break;
+            default:
+                g_assert_not_reached();
+            }
+        }
+        break;
+
+    case NV097_SET_SURFACE_FORMAT_COLOR_LE_X8R8G8B8_Z8R8G8B8:
+    case NV097_SET_SURFACE_FORMAT_COLOR_LE_X8R8G8B8_O8R8G8B8:
+    case NV097_SET_SURFACE_FORMAT_COLOR_LE_A8R8G8B8:
+    {
+        bool preserve_alpha =
+            surface->shape.color_format ==
+            NV097_SET_SURFACE_FORMAT_COLOR_LE_A8R8G8B8;
+
+        for (y = 0; y < height; y++) {
+            const uint8_t *src_row = src + y * src_stride;
+            uint8_t *dst_row = dst + y * dst_stride;
+
+            switch (surface->host_fmt.vk_format) {
+            case VK_FORMAT_B8G8R8A8_UNORM:
+                for (x = 0; x < width; x++) {
+                    const uint8_t *pixel = src_row + x * 4;
+                    uint8_t *out = dst_row + x * 4;
+                    out[0] = pixel[0];
+                    out[1] = pixel[1];
+                    out[2] = pixel[2];
+                    out[3] = preserve_alpha ? pixel[3] : 0xFF;
+                }
+                break;
+            case VK_FORMAT_R8G8B8A8_UNORM:
+                for (x = 0; x < width; x++) {
+                    const uint8_t *pixel = src_row + x * 4;
+                    uint8_t *out = dst_row + x * 4;
+                    out[0] = pixel[2];
+                    out[1] = pixel[1];
+                    out[2] = pixel[0];
+                    out[3] = preserve_alpha ? pixel[3] : 0xFF;
+                }
+                break;
+            default:
+                g_assert_not_reached();
+            }
+        }
+        break;
+    }
+
+    default:
+        g_assert_not_reached();
+    }
+}
+#endif
+
 static void download_surface_to_buffer(NV2AState *d, SurfaceBinding *surface,
                                        uint8_t *pixels)
 {
@@ -1209,8 +1345,29 @@ void pgraph_vk_upload_surface_data(NV2AState *d, SurfaceBinding *surface,
     //
 
     StorageBuffer *copy_buffer = &r->storage_buffers[BUFFER_STAGING_SRC];
-    size_t uploaded_image_size = surface->height * surface->width *
-                                 surface->fmt.bytes_per_pixel;
+    const uint8_t *upload_src = gl_read_buf;
+    unsigned int upload_src_stride = surface->pitch;
+    unsigned int upload_bytes_per_pixel = surface->fmt.bytes_per_pixel;
+    unsigned int upload_dst_stride = surface->width * upload_bytes_per_pixel;
+
+#ifdef __ANDROID__
+    g_autofree uint8_t *converted_upload_buf = NULL;
+    if (android_vk_surface_uses_host_conversion(surface)) {
+        upload_bytes_per_pixel = surface->host_fmt.host_bytes_per_pixel;
+        upload_src_stride = surface->width * upload_bytes_per_pixel;
+        upload_dst_stride = upload_src_stride;
+        converted_upload_buf =
+            g_malloc((size_t)surface->height * upload_src_stride);
+        android_vk_surface_convert_to_host(surface, gl_read_buf,
+                                           surface->width, surface->height,
+                                           surface->pitch,
+                                           converted_upload_buf,
+                                           upload_src_stride);
+        upload_src = converted_upload_buf;
+    }
+#endif
+
+    size_t uploaded_image_size = surface->height * upload_dst_stride;
     assert(uploaded_image_size <= copy_buffer->buffer_size);
 
     void *mapped_memory_ptr = NULL;
@@ -1226,9 +1383,8 @@ void pgraph_vk_upload_surface_data(NV2AState *d, SurfaceBinding *surface,
         use_compute_to_convert_depth_stencil_format;
     assert(no_conversion_necessary);
 
-    memcpy_image(mapped_memory_ptr, gl_read_buf,
-                 surface->width * surface->fmt.bytes_per_pixel, surface->pitch,
-                 surface->height);
+    memcpy_image(mapped_memory_ptr, upload_src, upload_dst_stride,
+                 upload_src_stride, surface->height);
 
     vmaFlushAllocation(r->allocator, copy_buffer->allocation, 0, VK_WHOLE_SIZE);
     vmaUnmapMemory(r->allocator, copy_buffer->allocation);
