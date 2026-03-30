@@ -1021,23 +1021,6 @@ static bool check_surface_to_texture_compatiblity(const SurfaceBinding *surface,
         return true;
     }
 
-#ifdef __ANDROID__
-    switch (surface->shape.color_format) {
-    case NV097_SET_SURFACE_FORMAT_COLOR_LE_X1R5G5B5_Z1R5G5B5:
-    case NV097_SET_SURFACE_FORMAT_COLOR_LE_X8R8G8B8_Z8R8G8B8:
-    case NV097_SET_SURFACE_FORMAT_COLOR_LE_A8R8G8B8:
-        /*
-         * Android GL routes these through RGBA8 surface transfers so guest
-         * alpha/color semantics are preserved. Sampling the raw Vulkan surface
-         * image directly can bypass that reinterpretation and show large black
-         * composition rectangles in 2D-heavy games.
-         */
-        return false;
-    default:
-        break;
-    }
-#endif
-
     VkColorFormatInfo tex_vkf = kelvin_color_format_vk_map[shape->color_format];
     return tex_vkf.vk_format &&
            surface->host_fmt.host_bytes_per_pixel == vk_format_texel_size(tex_vkf.vk_format);
