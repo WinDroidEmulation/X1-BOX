@@ -51,6 +51,68 @@ static VkSamplerAddressMode lookup_texture_address_mode(int idx)
     return pgraph_texture_addr_vk_map[idx];
 }
 
+#ifdef __ANDROID__
+static uint8_t android_vk_expand_5_to_8(uint8_t value)
+{
+    return (value << 3) | (value >> 2);
+}
+
+static bool android_vk_texture_needs_rgba8_upload(TextureShape s)
+{
+    switch (s.color_format) {
+    case NV097_SET_TEXTURE_FORMAT_COLOR_SZ_A1R5G5B5:
+    case NV097_SET_TEXTURE_FORMAT_COLOR_SZ_X1R5G5B5:
+    case NV097_SET_TEXTURE_FORMAT_COLOR_LU_IMAGE_A1R5G5B5:
+    case NV097_SET_TEXTURE_FORMAT_COLOR_LU_IMAGE_X1R5G5B5:
+        return true;
+    default:
+        return false;
+    }
+}
+
+static uint8_t *android_vk_texture_convert_to_rgba8(TextureShape s,
+                                                    const uint8_t *src,
+                                                    unsigned int width,
+                                                    unsigned int height,
+                                                    unsigned int depth,
+                                                    unsigned int row_pitch,
+                                                    unsigned int slice_pitch,
+                                                    size_t *converted_size)
+{
+    size_t size = width * height * depth * 4;
+    uint8_t *converted = g_malloc(size);
+
+    for (unsigned int z = 0; z < depth; z++) {
+        const uint8_t *src_slice = src + z * slice_pitch;
+        uint8_t *dst_slice = converted + z * width * height * 4;
+
+        for (unsigned int y = 0; y < height; y++) {
+            const uint8_t *src_row = src_slice + y * row_pitch;
+            uint8_t *dst_row = dst_slice + y * width * 4;
+
+            for (unsigned int x = 0; x < width; x++) {
+                uint16_t pixel = lduw_le_p(src_row + x * 2);
+                uint8_t *out = dst_row + x * 4;
+
+                out[0] = android_vk_expand_5_to_8((pixel >> 10) & 0x1F);
+                out[1] = android_vk_expand_5_to_8((pixel >> 5) & 0x1F);
+                out[2] = android_vk_expand_5_to_8(pixel & 0x1F);
+                out[3] =
+                    (s.color_format == NV097_SET_TEXTURE_FORMAT_COLOR_SZ_X1R5G5B5 ||
+                     s.color_format == NV097_SET_TEXTURE_FORMAT_COLOR_LU_IMAGE_X1R5G5B5) ?
+                        0xFF :
+                        ((pixel & 0x8000) ? 0xFF : 0x00);
+            }
+        }
+    }
+
+    if (converted_size) {
+        *converted_size = size;
+    }
+    return converted;
+}
+#endif
+
 // FIXME: Move to common
 // FIXME: We can shrink the size of this structure
 // FIXME: Use simple allocator
@@ -198,6 +260,14 @@ static TextureLayout *get_texture_layout(PGRAPHState *pg, int texture_idx)
             s, texture_data_ptr, palette_data_ptr, adjusted_width,
             adjusted_height, 1, adjusted_pitch, 0, &converted_size);
 
+#ifdef __ANDROID__
+        if (!converted && android_vk_texture_needs_rgba8_upload(s)) {
+            converted = android_vk_texture_convert_to_rgba8(
+                s, texture_data_ptr, adjusted_width, adjusted_height, 1,
+                adjusted_pitch, 0, &converted_size);
+        }
+#endif
+
         if (!converted) {
             int dst_stride = adjusted_width * f.bytes_per_pixel;
             assert(adjusted_width <= s.width);
@@ -292,6 +362,14 @@ static TextureLayout *get_texture_layout(PGRAPHState *pg, int texture_idx)
                         s, unswizzled, palette_data_ptr, width, height, 1,
                         pitch, 0, &converted_size);
 
+#ifdef __ANDROID__
+                    if (!converted && android_vk_texture_needs_rgba8_upload(s)) {
+                        converted = android_vk_texture_convert_to_rgba8(
+                            s, unswizzled, width, height, 1, pitch, 0,
+                            &converted_size);
+                    }
+#endif
+
                     if (converted) {
                         g_free(unswizzled);
                     } else {
@@ -371,6 +449,14 @@ static TextureLayout *get_texture_layout(PGRAPHState *pg, int texture_idx)
                 uint8_t *converted = pgraph_convert_texture_data(
                     s, unswizzled, palette_data_ptr, width, height, depth,
                     row_pitch, slice_pitch, &converted_size);
+
+#ifdef __ANDROID__
+                if (!converted && android_vk_texture_needs_rgba8_upload(s)) {
+                    converted = android_vk_texture_convert_to_rgba8(
+                        s, unswizzled, width, height, depth, row_pitch,
+                        slice_pitch, &converted_size);
+                }
+#endif
 
                 if (converted) {
                     g_free(unswizzled);
