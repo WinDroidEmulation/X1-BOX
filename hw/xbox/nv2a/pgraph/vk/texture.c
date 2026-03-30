@@ -1703,15 +1703,6 @@ static void create_texture(PGRAPHState *pg, int texture_idx)
         }
     }
 
-    if (filter & NV_PGRAPH_TEXFILTER0_ASIGNED)
-        NV2A_UNIMPLEMENTED("NV_PGRAPH_TEXFILTER0_ASIGNED");
-    if (filter & NV_PGRAPH_TEXFILTER0_RSIGNED)
-        NV2A_UNIMPLEMENTED("NV_PGRAPH_TEXFILTER0_RSIGNED");
-    if (filter & NV_PGRAPH_TEXFILTER0_GSIGNED)
-        NV2A_UNIMPLEMENTED("NV_PGRAPH_TEXFILTER0_GSIGNED");
-    if (filter & NV_PGRAPH_TEXFILTER0_BSIGNED)
-        NV2A_UNIMPLEMENTED("NV_PGRAPH_TEXFILTER0_BSIGNED");
-
     VkFilter vk_min_filter, vk_mag_filter;
     unsigned int mag_filter = GET_MASK(filter, NV_PGRAPH_TEXFILTER0_MAG);
     assert(mag_filter < ARRAY_SIZE(pgraph_texture_mag_filter_vk_map));
