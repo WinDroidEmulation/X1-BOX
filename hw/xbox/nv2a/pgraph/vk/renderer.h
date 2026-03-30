@@ -320,10 +320,16 @@ typedef struct PGRAPHVkDisplayState {
     GLuint gl_texture_id;
 } PGRAPHVkDisplayState;
 
+typedef enum {
+    COMPUTE_TYPE_DEPTH_STENCIL = 0,
+    COMPUTE_TYPE_DEPTH_STENCIL_DIRECT = 1,
+} ComputeType;
+
 typedef struct ComputePipelineKey {
     VkFormat host_fmt;
     bool pack;
     int workgroup_size;
+    ComputeType compute_type;
 } ComputePipelineKey;
 
 typedef struct ComputePipeline {
@@ -340,6 +346,13 @@ typedef struct PGRAPHVkComputeState {
     VkPipelineLayout pipeline_layout;
     Lru pipeline_cache;
     ComputePipeline *pipeline_cache_entries;
+
+    VkDescriptorPool direct_descriptor_pool;
+    VkDescriptorSetLayout direct_descriptor_set_layout;
+    VkDescriptorSet direct_descriptor_sets[1024];
+    int direct_descriptor_set_index;
+    VkPipelineLayout direct_pipeline_layout;
+    VkSampler direct_depth_sampler;
 } PGRAPHVkComputeState;
 
 typedef struct PGRAPHVkState {
@@ -579,6 +592,14 @@ void pgraph_vk_finalize_compute(PGRAPHState *pg);
 void pgraph_vk_pack_depth_stencil(PGRAPHState *pg, SurfaceBinding *surface,
                                   VkCommandBuffer cmd, VkBuffer src,
                                   VkBuffer dst, bool downscale);
+void pgraph_vk_pack_depth_stencil_direct(PGRAPHState *pg,
+                                         SurfaceBinding *surface,
+                                         VkCommandBuffer cmd,
+                                         VkImageView depth_view,
+                                         VkBuffer stencil_buf,
+                                         VkDeviceSize stencil_offset,
+                                         VkDeviceSize stencil_size,
+                                         VkBuffer dst, bool downscale);
 void pgraph_vk_unpack_depth_stencil(PGRAPHState *pg, SurfaceBinding *surface,
                                     VkCommandBuffer cmd, VkBuffer src,
                                     VkBuffer dst);
