@@ -217,8 +217,14 @@ static void init_pipeline_cache(PGRAPHState *pg)
     }
 #endif
 
-    VK_CHECK(vkCreatePipelineCache(r->device, &cache_info, NULL,
-                                   &r->vk_pipeline_cache));
+    VkResult cache_result = vkCreatePipelineCache(r->device, &cache_info, NULL,
+                                                  &r->vk_pipeline_cache);
+    if (cache_result != VK_SUCCESS) {
+        cache_info.initialDataSize = 0;
+        cache_info.pInitialData = NULL;
+        VK_CHECK(vkCreatePipelineCache(r->device, &cache_info, NULL,
+                                       &r->vk_pipeline_cache));
+    }
 
     const size_t pipeline_cache_size = 2048;
     lru_init(&r->pipeline_cache, 4096);
