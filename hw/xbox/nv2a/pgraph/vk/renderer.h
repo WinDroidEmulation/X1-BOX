@@ -237,6 +237,8 @@ typedef struct TextureBinding {
     VkImage image;
     VkImageLayout current_layout;
     VkImageView image_view;
+    VkImageView direct_surface_view;
+    VkImage direct_surface_image;
     VmaAllocation allocation;
     VkSampler sampler;
     bool possibly_dirty;

@@ -1103,6 +1103,57 @@ static void bind_surface_as_texture(PGRAPHState *pg, SurfaceBinding *surface,
     texture->draw_time = surface->draw_time;
 }
 
+static bool color_surface_can_direct_bind(const SurfaceBinding *surface,
+                                          const TextureBinding *texture)
+{
+    VkColorFormatInfo tex_vkf =
+        kelvin_color_format_vk_map[texture->key.state.color_format];
+
+    return surface->color && tex_vkf.vk_format &&
+           surface->host_fmt.vk_format == tex_vkf.vk_format;
+}
+
+static VkImageView get_surface_direct_texture_view(PGRAPHVkState *r,
+                                                   SurfaceBinding *surface,
+                                                   TextureBinding *texture)
+{
+    assert(surface->color);
+    assert(color_surface_can_direct_bind(surface, texture));
+
+    if (texture->direct_surface_view != VK_NULL_HANDLE &&
+        texture->direct_surface_image == surface->image) {
+        return texture->direct_surface_view;
+    }
+
+    if (texture->direct_surface_view != VK_NULL_HANDLE) {
+        vkDestroyImageView(r->device, texture->direct_surface_view, NULL);
+        texture->direct_surface_view = VK_NULL_HANDLE;
+        texture->direct_surface_image = VK_NULL_HANDLE;
+    }
+
+    VkColorFormatInfo tex_vkf =
+        kelvin_color_format_vk_map[texture->key.state.color_format];
+    VkImageViewCreateInfo view_info = {
+        .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+        .image = surface->image,
+        .viewType = VK_IMAGE_VIEW_TYPE_2D,
+        .format = surface->host_fmt.vk_format,
+        .subresourceRange = {
+            .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+            .baseMipLevel = 0,
+            .levelCount = 1,
+            .baseArrayLayer = 0,
+            .layerCount = 1,
+        },
+        .components = tex_vkf.component_map,
+    };
+
+    VK_CHECK(vkCreateImageView(r->device, &view_info, NULL,
+                               &texture->direct_surface_view));
+    texture->direct_surface_image = surface->image;
+    return texture->direct_surface_view;
+}
+
 static void bind_zeta_surface_as_texture(PGRAPHState *pg, SurfaceBinding *surface,
                                          TextureBinding *texture)
 {
@@ -1562,7 +1613,7 @@ static void create_texture(PGRAPHState *pg, int texture_idx)
     if (binding_found) {
         if (surface_to_texture) {
             bool can_direct_bind =
-                surface->color ||
+                color_surface_can_direct_bind(surface, snode) ||
                 !(surface->host_fmt.aspect & VK_IMAGE_ASPECT_STENCIL_BIT);
             if (can_direct_bind) {
                 VkImageLayout direct_layout;
@@ -1571,6 +1622,8 @@ static void create_texture(PGRAPHState *pg, int texture_idx)
                         bind_surface_as_texture(pg, surface, snode);
                     }
                     direct_layout = VK_IMAGE_LAYOUT_GENERAL;
+                    r->tex_surface_direct_views[texture_idx] =
+                        get_surface_direct_texture_view(r, surface, snode);
                 } else {
                     if (surface->draw_time != snode->draw_time ||
                         surface->image_layout !=
@@ -1579,9 +1632,10 @@ static void create_texture(PGRAPHState *pg, int texture_idx)
                     }
                     direct_layout =
                         VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+                    r->tex_surface_direct_views[texture_idx] =
+                        surface->image_view;
                 }
                 r->tex_surface_direct[texture_idx] = true;
-                r->tex_surface_direct_views[texture_idx] = surface->image_view;
                 r->tex_surface_direct_layout[texture_idx] = direct_layout;
             } else if (surface->draw_time != snode->draw_time) {
                 copy_surface_to_texture(pg, surface, snode);
@@ -1601,6 +1655,8 @@ static void create_texture(PGRAPHState *pg, int texture_idx)
 
     memcpy(&snode->key, &key, sizeof(key));
     snode->current_layout = VK_IMAGE_LAYOUT_UNDEFINED;
+    snode->direct_surface_view = VK_NULL_HANDLE;
+    snode->direct_surface_image = VK_NULL_HANDLE;
     snode->possibly_dirty = false;
     snode->hash = content_hash;
 
@@ -1792,19 +1848,21 @@ static void create_texture(PGRAPHState *pg, int texture_idx)
 
     if (surface_to_texture) {
         bool can_direct_bind =
-            surface->color ||
+            color_surface_can_direct_bind(surface, snode) ||
             !(surface->host_fmt.aspect & VK_IMAGE_ASPECT_STENCIL_BIT);
         if (can_direct_bind) {
             VkImageLayout direct_layout;
             if (surface->color) {
                 bind_surface_as_texture(pg, surface, snode);
                 direct_layout = VK_IMAGE_LAYOUT_GENERAL;
+                r->tex_surface_direct_views[texture_idx] =
+                    get_surface_direct_texture_view(r, surface, snode);
             } else {
                 bind_zeta_surface_as_texture(pg, surface, snode);
                 direct_layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+                r->tex_surface_direct_views[texture_idx] = surface->image_view;
             }
             r->tex_surface_direct[texture_idx] = true;
-            r->tex_surface_direct_views[texture_idx] = surface->image_view;
             r->tex_surface_direct_layout[texture_idx] = direct_layout;
         } else {
             copy_surface_to_texture(pg, surface, snode);
@@ -1927,6 +1985,8 @@ static void texture_cache_entry_init(Lru *lru, LruNode *node, const void *state)
     snode->image = VK_NULL_HANDLE;
     snode->allocation = VK_NULL_HANDLE;
     snode->image_view = VK_NULL_HANDLE;
+    snode->direct_surface_view = VK_NULL_HANDLE;
+    snode->direct_surface_image = VK_NULL_HANDLE;
     snode->sampler = VK_NULL_HANDLE;
     snode->submit_time = 0;
     snode->dirty_check_frame = 0;
@@ -1940,6 +2000,10 @@ static void texture_cache_release_node_resources(PGRAPHVkState *r, TextureBindin
 
     vkDestroyImageView(r->device, snode->image_view, NULL);
     snode->image_view = VK_NULL_HANDLE;
+
+    vkDestroyImageView(r->device, snode->direct_surface_view, NULL);
+    snode->direct_surface_view = VK_NULL_HANDLE;
+    snode->direct_surface_image = VK_NULL_HANDLE;
 
     vmaDestroyImage(r->allocator, snode->image, snode->allocation);
     snode->image = VK_NULL_HANDLE;
