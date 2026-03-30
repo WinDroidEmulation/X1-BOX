@@ -23,6 +23,11 @@
 #include "texture.h"
 #include "util.h"
 
+static uint8_t pgraph_expand_4_to_8(uint8_t value)
+{
+    return (value << 4) | value;
+}
+
 const BasicColorFormatInfo kelvin_color_format_info_map[66] = {
     [NV097_SET_TEXTURE_FORMAT_COLOR_SZ_Y8] = { 1, false },
     [NV097_SET_TEXTURE_FORMAT_COLOR_SZ_AY8] = { 1, false },
@@ -392,6 +397,27 @@ uint8_t *pgraph_convert_texture_data(const TextureShape s, const uint8_t *data,
                 pixel[0] = ((rgb655 & 0xFC00) >> 10) * 0x7F / 0x3F;
                 pixel[1] = ((rgb655 & 0x03E0) >> 5) * 0xFF / 0x1F - 0x80;
                 pixel[2] = (rgb655 & 0x001F) * 0xFF / 0x1F - 0x80;
+            }
+        }
+    } else if (s.color_format == NV097_SET_TEXTURE_FORMAT_COLOR_SZ_A4R4G4B4 ||
+               s.color_format ==
+                   NV097_SET_TEXTURE_FORMAT_COLOR_LU_IMAGE_A4R4G4B4) {
+        size = width * height * depth * 4;
+        converted_data = g_malloc(size);
+        for (int z = 0; z < depth; z++) {
+            const uint8_t *src = data + z * slice_pitch;
+            uint8_t *dst = converted_data + z * width * height * 4;
+            for (int y = 0; y < height; y++) {
+                const uint8_t *src_row = src + y * row_pitch;
+                uint8_t *dst_row = dst + y * width * 4;
+                for (int x = 0; x < width; x++) {
+                    uint16_t pixel = lduw_le_p(src_row + x * 2);
+                    uint8_t *out = dst_row + x * 4;
+                    out[0] = pgraph_expand_4_to_8((pixel >> 8) & 0x0F);
+                    out[1] = pgraph_expand_4_to_8((pixel >> 4) & 0x0F);
+                    out[2] = pgraph_expand_4_to_8(pixel & 0x0F);
+                    out[3] = pgraph_expand_4_to_8((pixel >> 12) & 0x0F);
+                }
             }
         }
     } else {
