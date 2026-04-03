@@ -893,6 +893,55 @@ static void copy_zeta_surface_to_texture(PGRAPHState *pg, SurfaceBinding *surfac
     texture->draw_time = surface->draw_time;
 }
 
+static bool color_surface_can_direct_bind(const SurfaceBinding *surface,
+                                          const TextureBinding *texture)
+{
+    VkColorFormatInfo tex_vkf =
+        kelvin_color_format_vk_map[texture->key.state.color_format];
+    return surface->color && tex_vkf.vk_format &&
+           surface->host_fmt.vk_format == tex_vkf.vk_format;
+}
+
+static VkImageView get_surface_direct_texture_view(PGRAPHVkState *r,
+                                                   SurfaceBinding *surface,
+                                                   TextureBinding *texture)
+{
+    assert(surface->color);
+    assert(color_surface_can_direct_bind(surface, texture));
+
+    if (texture->direct_surface_view != VK_NULL_HANDLE &&
+        texture->direct_surface_image == surface->image) {
+        return texture->direct_surface_view;
+    }
+
+    if (texture->direct_surface_view != VK_NULL_HANDLE) {
+        vkDestroyImageView(r->device, texture->direct_surface_view, NULL);
+        texture->direct_surface_view = VK_NULL_HANDLE;
+        texture->direct_surface_image = VK_NULL_HANDLE;
+    }
+
+    VkColorFormatInfo tex_vkf =
+        kelvin_color_format_vk_map[texture->key.state.color_format];
+    VkImageViewCreateInfo view_info = {
+        .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+        .image = surface->image,
+        .viewType = VK_IMAGE_VIEW_TYPE_2D,
+        .format = surface->host_fmt.vk_format,
+        .subresourceRange = {
+            .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+            .baseMipLevel = 0,
+            .levelCount = 1,
+            .baseArrayLayer = 0,
+            .layerCount = 1,
+        },
+        .components = tex_vkf.component_map,
+    };
+    VK_CHECK(vkCreateImageView(r->device, &view_info, NULL,
+                               &texture->direct_surface_view));
+    texture->direct_surface_image = surface->image;
+    return texture->direct_surface_view;
+}
+
 static void bind_surface_as_texture(PGRAPHState *pg, SurfaceBinding *surface,
                                     TextureBinding *texture)
 {
@@ -1346,8 +1395,14 @@ static void create_texture(PGRAPHState *pg, int texture_idx)
                 if (surface->draw_time != snode->draw_time) {
                     bind_surface_as_texture(pg, surface, snode);
                 }
-                r->tex_surface_direct[texture_idx] = true;
-                r->tex_surface_direct_views[texture_idx] = surface->image_view;
+                if (color_surface_can_direct_bind(surface, snode)) {
+                    r->tex_surface_direct[texture_idx] = true;
+                    r->tex_surface_direct_views[texture_idx] =
+                        get_surface_direct_texture_view(r, surface, snode);
+                } else {
+                    r->tex_surface_direct[texture_idx] = false;
+                    r->tex_surface_direct_views[texture_idx] = VK_NULL_HANDLE;
+                }
             } else if (surface->draw_time != snode->draw_time) {
                 copy_surface_to_texture(pg, surface, snode);
             }
@@ -1560,8 +1615,14 @@ static void create_texture(PGRAPHState *pg, int texture_idx)
     if (surface_to_texture) {
         if (surface->color) {
             bind_surface_as_texture(pg, surface, snode);
-            r->tex_surface_direct[texture_idx] = true;
-            r->tex_surface_direct_views[texture_idx] = surface->image_view;
+            if (color_surface_can_direct_bind(surface, snode)) {
+                r->tex_surface_direct[texture_idx] = true;
+                r->tex_surface_direct_views[texture_idx] =
+                    get_surface_direct_texture_view(r, surface, snode);
+            } else {
+                r->tex_surface_direct[texture_idx] = false;
+                r->tex_surface_direct_views[texture_idx] = VK_NULL_HANDLE;
+            }
         } else {
             copy_surface_to_texture(pg, surface, snode);
         }
