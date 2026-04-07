@@ -53,7 +53,7 @@ struct FPUProfileCounters g_fpu_profile;
 int g_fpu_helper_calls;
 #endif
 
-#if defined(XBOX) && (defined(__x86_64__) || defined(__aarch64__))
+#if defined(XBOX) && defined(__x86_64__)
 #include "ui/xemu-settings.h"
 #define MAP_GEN_HELPER_SOFT_HARD(name) \
     (g_use_fp_jit ? gen_helper_##name##__hard : gen_helper_##name##__soft)
@@ -4393,7 +4393,7 @@ void tcg_x86_init(void)
     fpstt = tcg_global_mem_new_i32(tcg_env,
                                    offsetof(CPUX86State, fpstt), "fpstt");
 
-#if defined(XBOX) && (defined(__x86_64__) || defined(__aarch64__))
+#if defined(XBOX) && defined(__x86_64__)
     g_use_fp_jit = g_config.perf.fp_jit;
 #endif
 }

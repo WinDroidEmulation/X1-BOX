@@ -460,7 +460,15 @@ floatx80 int32_to_floatx80__hard(int32_t a, float_status *status)
 #endif /* USE_HARD_FPU */
 #endif /* XBOX && __x86_64__ */
 
-#if defined(XBOX) && (defined(__x86_64__) || defined(__aarch64__))
+#ifndef FPU_HELPER_COUNT
+#define FPU_HELPER_COUNT() ((void)0)
+#endif
+
+#ifndef MAP_HELPER_SOFT_HARD
+#define MAP_HELPER_SOFT_HARD(func) helper_ ## func ## __soft
+#endif
+
+#if defined(XBOX) && defined(__x86_64__)
 #ifdef USE_HARD_FPU
 #define MAP_HELPER_SOFT_HARD(func) helper_ ## func ## __hard
 extern int g_fpu_helper_calls;
