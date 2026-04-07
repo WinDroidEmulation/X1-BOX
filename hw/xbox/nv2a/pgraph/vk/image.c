@@ -37,6 +37,10 @@ void pgraph_vk_transition_image_layout(PGRAPHState *pg, VkCommandBuffer cmd,
                                        VkImageLayout oldLayout,
                                        VkImageLayout newLayout)
 {
+    if (oldLayout == newLayout) {
+        return;
+    }
+    OPT_STAT_INC(transition_count);
     VK_LOG("image_layout_transition: fmt=%d old=%d new=%d", format, oldLayout, newLayout);
     VkImageMemoryBarrier barrier = {
         .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,

@@ -173,6 +173,10 @@ enum {
     XLAT_TEX_DIRTY_1,
     XLAT_TEX_DIRTY_2,
     XLAT_TEX_DIRTY_3,
+    /* Vertex data array offset: writes to pg->vertex_attributes[slot].
+     * The 'reg' field is 0; slot is encoded as (xlat - XLAT_VTX_ARRAY_OFFSET_0). */
+    XLAT_VTX_ARRAY_OFFSET_0,
+    XLAT_VTX_ARRAY_OFFSET_LAST = XLAT_VTX_ARRAY_OFFSET_0 + 15,
 };
 
 static inline uint32_t fast_xlat(unsigned int type, uint32_t p)
@@ -274,12 +278,14 @@ static const uint32_t mask_lut[] = {
     /* 46 */ NV_PGRAPH_SETUPRASTER_BACKFACEMODE,
     /* 47 */ NV_PGRAPH_SETUPRASTER_CULLCTRL,
     /* 48 */ NV_PGRAPH_SETUPRASTER_FRONTFACE,
+    /* 49 */ NV_PGRAPH_CHEOPS_OFFSET_CONST_LD_PTR,
 };
 
 #define MF_DIRECT(r)       { (r), 0, XLAT_NONE }
 #define MF_MASKED(r, m)    { (r), (m), XLAT_NONE }
 #define MF_XLAT(r, m, x)   { (r), (m), (x) }
 #define MF_TEX(r, slot)    { (r), 0, XLAT_TEX_DIRTY_0 + (slot) }
+#define MF_VTX_OFF(slot)   { 0, 0, XLAT_VTX_ARRAY_OFFSET_0 + (slot) }
 
 #define MI(method) ((method) >> 2)
 
@@ -554,12 +560,38 @@ static const MethodFastPath method_fast[0x800] = {
     [MI(0x1B1C + 64)]  = MF_TEX(NV_PGRAPH_TEXIMAGERECT1,  1),
     [MI(0x1B1C + 128)] = MF_TEX(NV_PGRAPH_TEXIMAGERECT2,  2),
     [MI(0x1B1C + 192)] = MF_TEX(NV_PGRAPH_TEXIMAGERECT3,  3),
+
+    /* --- Category E: Vertex data array offsets (custom handler) --- */
+
+    /* SET_VERTEX_DATA_ARRAY_OFFSET  0x1720..0x175C (16 slots, stride=4) */
+    [MI(0x1720)]      = MF_VTX_OFF(0),
+    [MI(0x1720 + 4)]  = MF_VTX_OFF(1),
+    [MI(0x1720 + 8)]  = MF_VTX_OFF(2),
+    [MI(0x1720 + 12)] = MF_VTX_OFF(3),
+    [MI(0x1720 + 16)] = MF_VTX_OFF(4),
+    [MI(0x1720 + 20)] = MF_VTX_OFF(5),
+    [MI(0x1720 + 24)] = MF_VTX_OFF(6),
+    [MI(0x1720 + 28)] = MF_VTX_OFF(7),
+    [MI(0x1720 + 32)] = MF_VTX_OFF(8),
+    [MI(0x1720 + 36)] = MF_VTX_OFF(9),
+    [MI(0x1720 + 40)] = MF_VTX_OFF(10),
+    [MI(0x1720 + 44)] = MF_VTX_OFF(11),
+    [MI(0x1720 + 48)] = MF_VTX_OFF(12),
+    [MI(0x1720 + 52)] = MF_VTX_OFF(13),
+    [MI(0x1720 + 56)] = MF_VTX_OFF(14),
+    [MI(0x1720 + 60)] = MF_VTX_OFF(15),
+
+    /* --- Category F: Additional masked register writes --- */
+
+    /* SET_TRANSFORM_CONSTANT_LOAD  0x1EA4 */
+    [MI(0x1EA4)] = MF_MASKED(NV_PGRAPH_CHEOPS_OFFSET, 49),
 };
 
 #undef MF_DIRECT
 #undef MF_MASKED
 #undef MF_XLAT
 #undef MF_TEX
+#undef MF_VTX_OFF
 #undef MI
 
 static inline bool fast_entry_apply(PGRAPHState *pg,
@@ -570,6 +602,14 @@ static inline bool fast_entry_apply(PGRAPHState *pg,
         bool changed = (p != pgraph_reg_r(pg, f->reg));
         pg->texture_dirty[slot] |= changed;
         pgraph_reg_w(pg, f->reg, p);
+        return true;
+    }
+    if (f->xlat >= XLAT_VTX_ARRAY_OFFSET_0 &&
+        f->xlat <= XLAT_VTX_ARRAY_OFFSET_LAST) {
+        int slot = f->xlat - XLAT_VTX_ARRAY_OFFSET_0;
+        pg->vertex_attributes[slot].dma_select = p & 0x80000000;
+        pg->vertex_attributes[slot].offset = p & 0x7fffffff;
+        pg->vertex_attr_gen++;
         return true;
     }
     if (f->xlat) {
@@ -594,6 +634,14 @@ static inline bool fast_entry_apply_atomic(PGRAPHState *pg,
         bool changed = (p != qatomic_read(&pg->regs_[f->reg]));
         pg->texture_dirty[slot] |= changed;
         pgraph_reg_w_atomic(pg, f->reg, p);
+        return true;
+    }
+    if (f->xlat >= XLAT_VTX_ARRAY_OFFSET_0 &&
+        f->xlat <= XLAT_VTX_ARRAY_OFFSET_LAST) {
+        int slot = f->xlat - XLAT_VTX_ARRAY_OFFSET_0;
+        pg->vertex_attributes[slot].dma_select = p & 0x80000000;
+        pg->vertex_attributes[slot].offset = p & 0x7fffffff;
+        pg->vertex_attr_gen++;
         return true;
     }
     if (f->xlat) {
@@ -639,7 +687,7 @@ int pgraph_method_try_fast(NV2AState *d, unsigned int subchannel,
     if (midx >= 0x800) return 0;
 
     const MethodFastPath *fast = &method_fast[midx];
-    if (!fast->reg) return 0;
+    if (!fast->reg && !fast->xlat) return 0;
 
     if (!fast_entry_apply_atomic(pg, fast, parameter)) return 0;
 
@@ -649,7 +697,7 @@ int pgraph_method_try_fast(NV2AState *d, unsigned int subchannel,
         unsigned int next_midx = midx + 1;
         if (next_midx >= 0x800) break;
         const MethodFastPath *nf = &method_fast[next_midx];
-        if (!nf->reg) break;
+        if (!nf->reg && !nf->xlat) break;
         uint32_t p = ldl_le_p(parameters + consumed);
         if (!fast_entry_apply_atomic(pg, nf, p)) break;
         midx = next_midx;
@@ -669,7 +717,7 @@ int pgraph_method_try_fast(NV2AState *d, unsigned int subchannel,
         if (consumed + 1 + next_count > max_lookahead_words) break;
         bool all_fast = true;
         for (uint32_t i = 0; i < next_count; i++) {
-            if (!method_fast[nm + i].reg) {
+            if (!method_fast[nm + i].reg && !method_fast[nm + i].xlat) {
                 all_fast = false;
                 break;
             }
@@ -1421,14 +1469,14 @@ int pgraph_method(NV2AState *d, unsigned int subchannel,
         pg->cached_graphics_class == NV_KELVIN_PRIMITIVE) {
         unsigned int midx = METHOD_ADDR_TO_INDEX(method);
         const MethodFastPath *fast = &method_fast[midx];
-        if (fast->reg) {
+        if (fast->reg || fast->xlat) {
             if (!fast_entry_apply(pg, fast, parameter)) goto slow_path;
             size_t consumed = 1;
             while (consumed < num_words_available) {
                 unsigned int next_midx = midx + 1;
                 if (next_midx >= 0x800) break;
                 const MethodFastPath *nf = &method_fast[next_midx];
-                if (!nf->reg) break;
+                if (!nf->reg && !nf->xlat) break;
                 uint32_t p = ldl_le_p(parameters + consumed);
                 if (!fast_entry_apply(pg, nf, p)) break;
                 midx = next_midx;
@@ -1451,7 +1499,7 @@ int pgraph_method(NV2AState *d, unsigned int subchannel,
                 if (consumed + 1 + next_count > max_lookahead_words) break;
                 bool all_fast = true;
                 for (uint32_t i = 0; i < next_count; i++) {
-                    if (!method_fast[nm + i].reg) {
+                    if (!method_fast[nm + i].reg && !method_fast[nm + i].xlat) {
                         all_fast = false;
                         break;
                     }
@@ -2942,6 +2990,7 @@ DEF_METHOD_INC(NV097, SET_TRANSFORM_PROGRAM)
     assert(program_load < NV2A_MAX_TRANSFORM_PROGRAM_LENGTH);
     pg->program_data[program_load][slot%4] = parameter;
     pg->program_data_dirty = true;
+    pg->vsh_program_data_gen++;
 
     if (slot % 4 == 3) {
         PG_SET_MASK(NV_PGRAPH_CHEOPS_OFFSET,
@@ -3963,27 +4012,51 @@ DEF_METHOD(NV097, LAUNCH_TRANSFORM_PROGRAM)
 {
     unsigned int program_start = parameter;
     assert(program_start < NV2A_MAX_TRANSFORM_PROGRAM_LENGTH);
-    Nv2aVshProgram program;
-    Nv2aVshParseResult result = nv2a_vsh_parse_program(
-            &program,
-            pg->program_data[program_start],
-            NV2A_MAX_TRANSFORM_PROGRAM_LENGTH - program_start);
-    assert(result == NV2AVPR_SUCCESS);
+
+    /* Invalidate cache when program data has been uploaded */
+    if (pg->vsh_program_cache_gen != pg->vsh_program_data_gen) {
+        for (int i = 0; i < NV2A_MAX_TRANSFORM_PROGRAM_LENGTH; i++) {
+            if (pg->vsh_program_cache_valid[i]) {
+                nv2a_vsh_program_destroy(&pg->vsh_program_cache[i]);
+                pg->vsh_program_cache_valid[i] = false;
+            }
+        }
+        pg->vsh_program_cache_gen = pg->vsh_program_data_gen;
+    }
+
+    /* Use cached parsed program or parse and cache */
+    Nv2aVshProgram *program = &pg->vsh_program_cache[program_start];
+    if (!pg->vsh_program_cache_valid[program_start]) {
+        Nv2aVshParseResult result = nv2a_vsh_parse_program(
+                program,
+                pg->program_data[program_start],
+                NV2A_MAX_TRANSFORM_PROGRAM_LENGTH - program_start);
+        assert(result == NV2AVPR_SUCCESS);
+        pg->vsh_program_cache_valid[program_start] = true;
+        pg->vsh_last_v0_hash[program_start] = 0;
+    }
+
+    /* Skip execution if v0 (input register) hasn't changed — output is deterministic */
+    const uint32_t *v0 = pg->vertex_state_shader_v0;
+    uint32_t v0_hash = v0[0] ^ v0[1] ^ v0[2] ^ v0[3];
+    if (v0_hash == 0) v0_hash = 1; /* distinguish from uninitialised zero */
+    if (v0_hash == pg->vsh_last_v0_hash[program_start]) {
+        return;
+    }
+    pg->vsh_last_v0_hash[program_start] = v0_hash;
 
     Nv2aVshCPUXVSSExecutionState state_linkage;
     Nv2aVshExecutionState state = nv2a_vsh_emu_initialize_xss_execution_state(
             &state_linkage, (float*)pg->vsh_constants);
     memcpy(state_linkage.input_regs, pg->vertex_state_shader_v0, sizeof(pg->vertex_state_shader_v0));
 
-    nv2a_vsh_emu_execute_track_context_writes(&state, &program, pg->vsh_constants_dirty);
+    nv2a_vsh_emu_execute_track_context_writes(&state, program, pg->vsh_constants_dirty);
     for (int i = 0; i < NV2A_VERTEXSHADER_CONSTANTS; i++) {
         if (pg->vsh_constants_dirty[i]) {
             pg->vsh_constants_any_dirty = true;
             break;
         }
     }
-
-    nv2a_vsh_program_destroy(&program);
 }
 
 DEF_METHOD(NV097, SET_TRANSFORM_EXECUTION_MODE)

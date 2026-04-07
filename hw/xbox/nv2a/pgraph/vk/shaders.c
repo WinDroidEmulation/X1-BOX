@@ -1307,10 +1307,12 @@ void pgraph_vk_update_shader_uniforms(PGRAPHState *pg)
     ShaderUniformLayout *vsh_layout = &binding->vsh.module_info->uniforms;
     ShaderUniformLayout *psh_layout = &binding->psh.module_info->uniforms;
 
-    uint64_t vsh_hash_before = fast_hash(vsh_layout->allocation,
-                                         vsh_layout->total_size);
-    uint64_t psh_hash_before = fast_hash(psh_layout->allocation,
-                                         psh_layout->total_size);
+    /* Check if any constant/light arrays were modified since last update.
+     * If so, we know uniforms changed — skip the expensive pre-hash. */
+    bool constants_dirty = pg->vsh_constants_any_dirty ||
+                           pg->ltctxa_any_dirty ||
+                           pg->ltctxb_any_dirty ||
+                           pg->ltc1_any_dirty;
 
     VshUniformValues vsh_values;
     pgraph_glsl_set_vsh_uniform_values(pg, &binding->state.vsh,
@@ -1340,13 +1342,30 @@ void pgraph_vk_update_shader_uniforms(PGRAPHState *pg)
                           binding->psh.uniform_locs, &psh_values,
                           PshUniform__COUNT);
 
-    uint64_t vsh_hash_after = fast_hash(vsh_layout->allocation,
-                                        vsh_layout->total_size);
-    uint64_t psh_hash_after = fast_hash(psh_layout->allocation,
-                                        psh_layout->total_size);
-    if (vsh_hash_before != vsh_hash_after ||
-        psh_hash_before != psh_hash_after) {
+    if (constants_dirty) {
+        /* Dirty flags already tell us uniforms changed — skip comparison hash */
         r->uniforms_changed = true;
+        r->last_vsh_uniform_hash = fast_hash(vsh_layout->allocation,
+                                             vsh_layout->total_size);
+        r->last_psh_uniform_hash = fast_hash(psh_layout->allocation,
+                                             psh_layout->total_size);
+        pg->vsh_constants_any_dirty = false;
+        pg->ltctxa_any_dirty = false;
+        pg->ltctxb_any_dirty = false;
+        pg->ltc1_any_dirty = false;
+    } else {
+        /* No constant/light changes — hash for other uniform changes
+         * (clipRange, fogParam, texScale, etc.) */
+        uint64_t vsh_hash = fast_hash(vsh_layout->allocation,
+                                      vsh_layout->total_size);
+        uint64_t psh_hash = fast_hash(psh_layout->allocation,
+                                      psh_layout->total_size);
+        if (vsh_hash != r->last_vsh_uniform_hash ||
+            psh_hash != r->last_psh_uniform_hash) {
+            r->uniforms_changed = true;
+        }
+        r->last_vsh_uniform_hash = vsh_hash;
+        r->last_psh_uniform_hash = psh_hash;
     }
 
     NV2A_VK_DGROUP_END();

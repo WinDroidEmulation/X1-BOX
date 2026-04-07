@@ -117,6 +117,8 @@ struct OptBisectStats {
     int inline_clear_hits;
     int inline_clear_misses;
     int render_pass_breaks;
+    int barrier_count;
+    int transition_count;
     int finish_calls;
     int finish_vtx_dirty;
     int finish_surf_create;
@@ -1242,6 +1244,8 @@ typedef struct PGRAPHVkState {
     uint64_t uniform_buffer_hashes[2];
     size_t uniform_buffer_offsets[2];
     bool uniforms_changed;
+    uint64_t last_vsh_uniform_hash;
+    uint64_t last_psh_uniform_hash;
 
     /* Cached uniform state for dirty tracking */
     float cached_material_alpha;

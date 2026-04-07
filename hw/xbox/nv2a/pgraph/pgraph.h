@@ -33,6 +33,7 @@
 #include "texture.h"
 #include "util.h"
 #include "vsh_regs.h"
+#include "nv2a_vsh_emulator.h"
 
 typedef struct NV2AState NV2AState;
 typedef struct PGRAPHNullState PGRAPHNullState;
@@ -184,6 +185,14 @@ typedef struct PGRAPHState {
     uint32_t vertex_state_shader_v0[4];
     uint32_t program_data[NV2A_MAX_TRANSFORM_PROGRAM_LENGTH][VSH_TOKEN_SIZE];
     bool program_data_dirty;
+
+    /* Cached parsed vertex state shader programs (avoids re-parsing on every
+     * LAUNCH_TRANSFORM_PROGRAM). Invalidated when program data is uploaded. */
+    uint32_t vsh_program_cache_gen;
+    uint32_t vsh_program_data_gen;
+    bool vsh_program_cache_valid[NV2A_MAX_TRANSFORM_PROGRAM_LENGTH];
+    Nv2aVshProgram vsh_program_cache[NV2A_MAX_TRANSFORM_PROGRAM_LENGTH];
+    uint32_t vsh_last_v0_hash[NV2A_MAX_TRANSFORM_PROGRAM_LENGTH];
 
     uint32_t vsh_constants[NV2A_VERTEXSHADER_CONSTANTS][4];
     bool vsh_constants_dirty[NV2A_VERTEXSHADER_CONSTANTS];
