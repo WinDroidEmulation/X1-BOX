@@ -171,7 +171,7 @@ jobs:
               '-DCMAKE_CXX_FLAGS_RELEASE=-O3 -DNDEBUG -g0 -march=armv8-a+simd -fvisibility=hidden -ffunction-sections -fdata-sections',
 
               '-DCMAKE_SHARED_LINKER_FLAGS=-Wl,--gc-sections"':
-              '-DCMAKE_SHARED_LINKER_FLAGS=-Wl,--gc-sections,-s"',
+              '-DCMAKE_SHARED_LINKER_FLAGS=--Wl,--gc-sections,--strip-all"'
           }
 
           for old, new in replacements.items():
