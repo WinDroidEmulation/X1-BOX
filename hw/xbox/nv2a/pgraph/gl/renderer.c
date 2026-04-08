@@ -60,20 +60,20 @@ static void early_context_init(void)
     g_nv2a_context_display = glo_context_wrap_current();
     if (!g_nv2a_context_display) {
 #ifdef __ANDROID__
-        __android_log_print(ANDROID_LOG_ERROR, "xemu-android",
+        __android_log_print(ANDROID_LOG_ERROR, "hakuX",
                             "early_context_init: no current GL context");
 #endif
         fprintf(stderr, "Warning: Failed to wrap current GL context\n");
         return;
     }
 #ifdef __ANDROID__
-    __android_log_print(ANDROID_LOG_INFO, "xemu-android",
+    __android_log_print(ANDROID_LOG_INFO, "hakuX",
                         "early_context_init: wrapped current GL context");
 #endif
     // Android: defer render context creation to QEMU thread.
     g_nv2a_context_render = NULL;
 #ifdef __ANDROID__
-    __android_log_print(ANDROID_LOG_INFO, "xemu-android",
+    __android_log_print(ANDROID_LOG_INFO, "hakuX",
                         "early_context_init: defer render GL context creation");
 #endif
     return;
@@ -99,7 +99,7 @@ static void pgraph_gl_init(NV2AState *d, Error **errp)
             error_setg(errp, "Failed to create render GL context");
             return;
         }
-        __android_log_print(ANDROID_LOG_INFO, "xemu-android",
+        __android_log_print(ANDROID_LOG_INFO, "hakuX",
                             "pgraph_gl_init: created render GL context");
     }
 #endif
@@ -110,9 +110,33 @@ static void pgraph_gl_init(NV2AState *d, Error **errp)
     r->bgra_supported = gl_extension_supported(exts, "GL_EXT_texture_format_BGRA8888") ||
                         gl_extension_supported(exts, "GL_OES_texture_format_BGRA8888") ||
                         gl_extension_supported(exts, "GL_EXT_texture_format_BGRA8888_OES");
-    __android_log_print(ANDROID_LOG_INFO, "xemu-android",
-                        "pgraph_gl_init: bgra_supported=%s",
-                        r->bgra_supported ? "yes" : "no");
+    r->geometry_shaders_supported =
+        gl_extension_supported(exts, "GL_EXT_geometry_shader") ||
+        gl_extension_supported(exts, "GL_OES_geometry_shader");
+
+    /* Detect GLSL ES version from GL_SHADING_LANGUAGE_VERSION.
+     * Format: "OpenGL ES GLSL ES X.YZ" — we want X*100 + Y*10. */
+    r->gles_version = 300; /* safe default */
+    const char *glsl_ver = (const char *)glGetString(GL_SHADING_LANGUAGE_VERSION);
+    if (glsl_ver) {
+        int major = 0, minor = 0;
+        /* Try to parse "X.Y" from the version string */
+        const char *p = glsl_ver;
+        while (*p && !(*p >= '0' && *p <= '9')) p++; /* skip to first digit */
+        if (*p) {
+            major = *p - '0'; p++;
+            if (*p == '.') { p++; if (*p >= '0' && *p <= '9') minor = *p - '0'; }
+            if (major >= 3) {
+                r->gles_version = major * 100 + minor * 10;
+            }
+        }
+    }
+    __android_log_print(ANDROID_LOG_INFO, "hakuX",
+                        "pgraph_gl_init: bgra=%s geom_shader=%s glsl_es=%d (%s)",
+                        r->bgra_supported ? "yes" : "no",
+                        r->geometry_shaders_supported ? "yes" : "no",
+                        r->gles_version,
+                        glsl_ver ? glsl_ver : "unknown");
 #endif
 
 #if DEBUG_NV2A_GL
@@ -171,7 +195,7 @@ static void pgraph_gl_init(NV2AState *d, Error **errp)
         NV2A_GL_ZPASS_QUERY_TARGET != 0 &&
         (epoxy_gl_version() >= 30 ||
          gl_extension_supported(exts, "GL_EXT_occlusion_query_boolean"));
-    __android_log_print(ANDROID_LOG_INFO, "xemu-android",
+    __android_log_print(ANDROID_LOG_INFO, "hakuX",
                         "pgraph_gl_init: texture_border_clamp=%s texture_lod_bias=%s occlusion_query_boolean=%s",
                         r->supported_extensions.texture_border_clamp ? "yes" : "no",
                         r->supported_extensions.texture_lod_bias ? "yes" : "no",

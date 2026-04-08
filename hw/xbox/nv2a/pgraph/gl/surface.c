@@ -46,7 +46,7 @@ static bool android_log_and_drain_gl_errors(const char *ctx)
     }
 
     while ((err = glGetError()) != GL_NO_ERROR) {
-        __android_log_print(ANDROID_LOG_WARN, "xemu-android",
+        __android_log_print(ANDROID_LOG_WARN, "hakuX",
                             "GL error 0x%X at %s", err, ctx);
         had_error = true;
     }
@@ -63,7 +63,7 @@ static bool android_log_surface_download_errors(const char *ctx,
         return had_error;
     }
 
-    __android_log_print(ANDROID_LOG_WARN, "xemu-android",
+    __android_log_print(ANDROID_LOG_WARN, "hakuX",
                         "  surface download: kind=%s attachment=0x%X format=0x%X "
                         "type=0x%X bpp=%u size=%ux%u pitch=%u addr=0x%llX",
                         surface->color ? "color" : "zeta",
@@ -2060,7 +2060,7 @@ static bool android_surface_download_z24s8_to_guest(NV2AState *d,
         if (!warned_stencil_readback_unsupported) {
             warned_stencil_readback_unsupported = true;
             __android_log_print(
-                ANDROID_LOG_WARN, "xemu-android",
+                ANDROID_LOG_WARN, "hakuX",
                 "surface_download_z24s8: stencil readback unsupported on this "
                 "GLES driver, substituting zero stencil");
         }

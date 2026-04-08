@@ -24,45 +24,37 @@
 
 #ifdef __ANDROID__
 #include <android/log.h>
-#include <dlfcn.h>
+#include <vulkan/vulkan_android.h>
 #endif
 #include <volk.h>
-
-#ifdef __ANDROID__
-static void *g_custom_vk_handle = NULL;
-
-static bool android_try_load_custom_vulkan(void)
-{
-    const char *path = getenv("XEMU_VULKAN_DRIVER");
-    if (!path || path[0] == '\0') {
-        return false;
-    }
-    g_custom_vk_handle = dlopen(path, RTLD_NOW | RTLD_LOCAL);
-    if (!g_custom_vk_handle) {
-        fprintf(stderr, "Custom Vulkan driver dlopen failed: %s\n", dlerror());
-        return false;
-    }
-    PFN_vkGetInstanceProcAddr proc =
-        (PFN_vkGetInstanceProcAddr)dlsym(g_custom_vk_handle, "vkGetInstanceProcAddr");
-    if (!proc) {
-        fprintf(stderr, "Custom Vulkan driver: vkGetInstanceProcAddr not found\n");
-        dlclose(g_custom_vk_handle);
-        g_custom_vk_handle = NULL;
-        return false;
-    }
-    volkInitializeCustom(proc);
-    fprintf(stderr, "Custom Vulkan driver loaded: %s\n", path);
-    return true;
-}
-#endif
 
 #define VkExtensionPropertiesArray GArray
 #define StringArray GArray
 
 static bool enable_validation = false;
+static bool renderdoc_layer_active = false;
+static bool external_capture_layer_active = false;
+
+/* Filled during select_physical_device for display in the Android overlay. */
+char g_vulkan_driver_info[256] = "Vulkan: initializing...";
 
 static char const *const validation_layers[] = {
     "VK_LAYER_KHRONOS_validation",
+};
+
+static char const *const required_device_extensions[] = {
+#ifdef WIN32
+    VK_KHR_EXTERNAL_MEMORY_WIN32_EXTENSION_NAME,
+    VK_KHR_EXTERNAL_SEMAPHORE_WIN32_EXTENSION_NAME,
+#elif defined(__ANDROID__)
+    VK_ANDROID_EXTERNAL_MEMORY_ANDROID_HARDWARE_BUFFER_EXTENSION_NAME,
+    VK_KHR_EXTERNAL_MEMORY_EXTENSION_NAME,
+    VK_EXT_QUEUE_FAMILY_FOREIGN_EXTENSION_NAME,
+    VK_KHR_EXTERNAL_SEMAPHORE_FD_EXTENSION_NAME,
+#else
+    VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME,
+    VK_KHR_EXTERNAL_SEMAPHORE_FD_EXTENSION_NAME,
+#endif
 };
 
 static VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback(
@@ -70,7 +62,19 @@ static VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback(
     VkDebugUtilsMessageTypeFlagsEXT messageType,
     const VkDebugUtilsMessengerCallbackDataEXT *pCallbackData, void *pUserData)
 {
+#ifdef __ANDROID__
+    int prio = ANDROID_LOG_VERBOSE;
+    if (messageSeverity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT)
+        prio = ANDROID_LOG_ERROR;
+    else if (messageSeverity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT)
+        prio = ANDROID_LOG_WARN;
+    else if (messageSeverity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT)
+        prio = ANDROID_LOG_INFO;
+    __android_log_print(prio, "xemu-vk-validation", "%s",
+                        pCallbackData->pMessage);
+#else
     fprintf(stderr, "[vk] %s\n", pCallbackData->pMessage);
+#endif
 
     if ((messageType & VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT) &&
         (messageSeverity & (VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT |
@@ -174,10 +178,31 @@ static bool create_instance(PGRAPHState *pg, Error **errp)
     VkResult result;
 
 #ifdef __ANDROID__
-    if (!android_try_load_custom_vulkan()) {
-        result = volkInitialize();
+    /*
+     * When RenderDoc is injected, use the standard Vulkan loader so
+     * RenderDoc's layer can intercept all API calls.  Custom drivers
+     * loaded via adrenotools bypass the loader layer chain, making
+     * RenderDoc report "Vulkan (Unsupported)".
+     */
+    bool use_standard_loader = false;
+#ifdef CONFIG_RENDERDOC
+    if (nv2a_dbg_renderdoc_available()) {
+        fprintf(stderr, "RenderDoc detected — using standard Vulkan loader "
+                        "(custom driver bypassed for capture)\n");
+        use_standard_loader = true;
+    }
+#endif
+    if (!use_standard_loader) {
+        extern PFN_vkGetInstanceProcAddr xemu_android_get_vk_proc_addr(void);
+        PFN_vkGetInstanceProcAddr custom_proc = xemu_android_get_vk_proc_addr();
+        if (custom_proc) {
+            volkInitializeCustom(custom_proc);
+            result = VK_SUCCESS;
+        } else {
+            result = volkInitialize();
+        }
     } else {
-        result = VK_SUCCESS;
+        result = volkInitialize();
     }
 #else
     result = volkInitialize();
@@ -187,6 +212,17 @@ static bool create_instance(PGRAPHState *pg, Error **errp)
         return false;
     }
 
+    /* Query the highest instance version the loader supports, then clamp to
+     * our maximum (1.3). This lets us run on Vulkan 1.1+ devices without
+     * hard-coding a version that the loader would use to cap device features. */
+    uint32_t instance_version = VK_API_VERSION_1_1;
+    if (vkEnumerateInstanceVersion) {
+        vkEnumerateInstanceVersion(&instance_version);
+    }
+    if (instance_version > VK_API_VERSION_1_3) {
+        instance_version = VK_API_VERSION_1_3;
+    }
+
     VkApplicationInfo app_info = {
         .sType = VK_STRUCTURE_TYPE_APPLICATION_INFO,
         .pApplicationName = "xemu",
@@ -194,7 +230,7 @@ static bool create_instance(PGRAPHState *pg, Error **errp)
             xemu_version_major, xemu_version_minor, xemu_version_patch),
         .pEngineName = "No Engine",
         .engineVersion = VK_MAKE_VERSION(1, 0, 0),
-        .apiVersion = VK_API_VERSION_1_1,
+        .apiVersion = instance_version,
     };
 
     g_autoptr(VkExtensionPropertiesArray) available_extensions =
@@ -227,6 +263,32 @@ static bool create_instance(PGRAPHState *pg, Error **errp)
 
     enable_validation = g_config.display.vulkan.validation_layers;
 
+#ifdef __ANDROID__
+    __android_log_print(ANDROID_LOG_INFO, "xemu-vk-validation",
+                        "validation_layers config = %d", enable_validation ? 1 : 0);
+    {
+        uint32_t n = 0;
+        vkEnumerateInstanceLayerProperties(&n, NULL);
+        __android_log_print(ANDROID_LOG_INFO, "xemu-vk-validation",
+                            "Available instance layers: %u", n);
+        if (n > 0) {
+            VkLayerProperties *lp = g_malloc_n(n, sizeof(VkLayerProperties));
+            vkEnumerateInstanceLayerProperties(&n, lp);
+            for (uint32_t i = 0; i < n; i++) {
+                __android_log_print(ANDROID_LOG_INFO, "xemu-vk-validation",
+                                    "  layer[%u]: %s", i, lp[i].layerName);
+            }
+            g_free(lp);
+        }
+    }
+    {
+        uint32_t n = 0;
+        vkEnumerateInstanceExtensionProperties(NULL, &n, NULL);
+        __android_log_print(ANDROID_LOG_INFO, "xemu-vk-validation",
+                            "Available instance extensions: %u", n);
+    }
+#endif
+
     VkValidationFeatureEnableEXT enables[] = {
         VK_VALIDATION_FEATURE_ENABLE_SYNCHRONIZATION_VALIDATION_EXT,
         // VK_VALIDATION_FEATURE_ENABLE_BEST_PRACTICES_EXT,
@@ -238,17 +300,70 @@ static bool create_instance(PGRAPHState *pg, Error **errp)
         .pEnabledValidationFeatures = enables,
     };
 
+    const char *all_layers[8];
+    uint32_t all_layer_count = 0;
+
+    {
+        static const char *capture_layers[] = {
+            "VK_LAYER_RENDERDOC_Capture",
+            "VkLayerGPA",
+            "GFXReconstruct",
+            NULL,
+        };
+        uint32_t n = 0;
+        vkEnumerateInstanceLayerProperties(&n, NULL);
+        if (n > 0) {
+            VkLayerProperties *lp = g_malloc_n(n, sizeof(VkLayerProperties));
+            vkEnumerateInstanceLayerProperties(&n, lp);
+            for (uint32_t i = 0; i < n; i++) {
+                for (int j = 0; capture_layers[j]; j++) {
+                    if (!strcmp(lp[i].layerName, capture_layers[j])) {
+                        fprintf(stderr, "Capture layer found: %s — enabling\n",
+                                lp[i].layerName);
+#ifdef __ANDROID__
+                        __android_log_print(ANDROID_LOG_INFO, "xemu-vk-debug",
+                                            "Capture layer found: %s, enabling",
+                                            lp[i].layerName);
+#endif
+                        all_layers[all_layer_count++] = capture_layers[j];
+                        if (!strcmp(capture_layers[j],
+                                   "VK_LAYER_RENDERDOC_Capture")) {
+                            renderdoc_layer_active = true;
+                        }
+                        external_capture_layer_active = true;
+                    }
+                }
+            }
+            g_free(lp);
+        }
+    }
+
     if (enable_validation) {
         if (check_validation_layer_support()) {
             fprintf(stderr, "Warning: Validation layers enabled. Expect "
                             "performance impact.\n");
-            create_info.enabledLayerCount = ARRAY_SIZE(validation_layers);
-            create_info.ppEnabledLayerNames = validation_layers;
+#ifdef __ANDROID__
+            __android_log_print(ANDROID_LOG_WARN, "xemu-vk-validation",
+                                "Validation layers ENABLED — expect performance impact");
+#endif
+            for (int i = 0; i < ARRAY_SIZE(validation_layers); i++) {
+                all_layers[all_layer_count++] = validation_layers[i];
+            }
             create_info.pNext = &validationFeatures;
         } else {
             fprintf(stderr, "Warning: validation layers not available\n");
+#ifdef __ANDROID__
+            __android_log_print(ANDROID_LOG_ERROR, "xemu-vk-validation",
+                                "Validation layers requested but NOT AVAILABLE — "
+                                "push the layer .so via adb");
+#endif
             enable_validation = false;
         }
+    }
+
+    if (all_layer_count > 0) {
+        create_info.enabledLayerCount = all_layer_count;
+        create_info.ppEnabledLayerNames = all_layers;
     }
 
     result = vkCreateInstance(&create_info, NULL, &r->instance);
@@ -258,6 +373,19 @@ static bool create_instance(PGRAPHState *pg, Error **errp)
     }
 
     volkLoadInstance(r->instance);
+
+#ifdef CONFIG_RENDERDOC
+    if (!nv2a_dbg_renderdoc_available()) {
+        nv2a_dbg_renderdoc_init();
+        if (nv2a_dbg_renderdoc_available()) {
+            fprintf(stderr, "RenderDoc API found after instance creation\n");
+#ifdef __ANDROID__
+            __android_log_print(ANDROID_LOG_INFO, "xemu-vk-debug",
+                                "RenderDoc API found after instance creation");
+#endif
+        }
+    }
+#endif
 
     if (r->debug_utils_extension_enabled) {
         VkDebugUtilsMessengerCreateInfoEXT messenger_info = {
@@ -332,23 +460,12 @@ get_available_device_extensions(VkPhysicalDevice device)
 
 static StringArray *get_required_device_extension_names(void)
 {
-    StringArray *extensions = g_array_sized_new(FALSE, FALSE, sizeof(char *), 2);
+    StringArray *extensions =
+        g_array_sized_new(FALSE, FALSE, sizeof(char *),
+                          ARRAY_SIZE(required_device_extensions));
 
-#ifdef WIN32
-    static char const *const required_device_extensions[] = {
-        VK_KHR_EXTERNAL_MEMORY_WIN32_EXTENSION_NAME,
-        VK_KHR_EXTERNAL_SEMAPHORE_WIN32_EXTENSION_NAME,
-    };
     g_array_append_vals(extensions, required_device_extensions,
                         ARRAY_SIZE(required_device_extensions));
-#elif HAVE_EXTERNAL_MEMORY
-    static char const *const required_device_extensions[] = {
-        VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME,
-        VK_KHR_EXTERNAL_SEMAPHORE_FD_EXTENSION_NAME,
-    };
-    g_array_append_vals(extensions, required_device_extensions,
-                        ARRAY_SIZE(required_device_extensions));
-#endif
 
     return extensions;
 }
@@ -366,6 +483,73 @@ static void add_optional_device_extension_names(
     r->memory_budget_extension_enabled = add_extension_if_available(
         available_extensions, enabled_extension_names,
         VK_EXT_MEMORY_BUDGET_EXTENSION_NAME);
+
+    if (r->device_props.apiVersion < VK_API_VERSION_1_3) {
+        r->extended_dynamic_state_supported = add_extension_if_available(
+            available_extensions, enabled_extension_names,
+            VK_EXT_EXTENDED_DYNAMIC_STATE_EXTENSION_NAME);
+    } else {
+        r->extended_dynamic_state_supported = true;
+    }
+
+#if OPT_DYNAMIC_BLEND
+    /*
+     * Stock Qualcomm drivers often advertise EXT_extended_dynamic_state3 but
+     * crash or fault inside vkCmdSetColorBlend* / related dynamic state during
+     * real draws. Turnip and other updaters are fine; skip EDS3 on Adreno-only
+     * Android so we use static pipeline blend state instead.
+     */
+# ifdef __ANDROID__
+    extern bool xemu_android_vulkan_custom_driver_zip_loaded(void);
+    if (r->device_props.vendorID == 0x5143u &&
+        !xemu_android_vulkan_custom_driver_zip_loaded()) {
+        r->eds3_blend_supported = false;
+        fprintf(stderr, "Qualcomm GPU: omitting %s (use static blend for stock-driver compatibility)\n",
+                VK_EXT_EXTENDED_DYNAMIC_STATE_3_EXTENSION_NAME);
+        __android_log_print(ANDROID_LOG_INFO, "hakuX",
+                              "Qualcomm stock driver: dynamic blend (EDS3) disabled");
+    } else
+# endif
+    {
+        r->eds3_blend_supported = add_extension_if_available(
+            available_extensions, enabled_extension_names,
+            VK_EXT_EXTENDED_DYNAMIC_STATE_3_EXTENSION_NAME);
+    }
+#endif
+
+#if OPT_BINDLESS_TEXTURES
+    {
+        extern bool xemu_get_bindless_textures(void);
+        if (xemu_get_bindless_textures()) {
+            if (r->device_props.apiVersion >= VK_API_VERSION_1_2) {
+                r->bindless_textures_supported = true;
+            } else {
+                r->bindless_textures_supported = add_extension_if_available(
+                    available_extensions, enabled_extension_names,
+                    VK_EXT_DESCRIPTOR_INDEXING_EXTENSION_NAME);
+            }
+        } else {
+            r->bindless_textures_supported = false;
+        }
+    }
+#endif
+
+#ifdef __ANDROID__
+    extern bool xemu_android_vulkan_custom_driver_zip_loaded(void);
+    if (r->device_props.vendorID == 0x5143u &&
+        !xemu_android_vulkan_custom_driver_zip_loaded()) {
+        r->push_descriptors_supported = false;
+        fprintf(stderr, "Qualcomm GPU: omitting %s (crashes in stock driver)\n",
+                VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME);
+        __android_log_print(ANDROID_LOG_INFO, "hakuX",
+                            "Qualcomm stock driver: push descriptors disabled");
+    } else
+#endif
+    {
+        r->push_descriptors_supported = add_extension_if_available(
+            available_extensions, enabled_extension_names,
+            VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME);
+    }
 }
 
 static bool check_device_support_required_extensions(VkPhysicalDevice device)
@@ -373,188 +557,13 @@ static bool check_device_support_required_extensions(VkPhysicalDevice device)
     g_autoptr(VkExtensionPropertiesArray) available_extensions =
         get_available_device_extensions(device);
 
-#if !(defined(WIN32) || HAVE_EXTERNAL_MEMORY)
-    return true;
-#else
-#ifdef WIN32
-    static char const *const required_device_extensions[] = {
-        VK_KHR_EXTERNAL_MEMORY_WIN32_EXTENSION_NAME,
-        VK_KHR_EXTERNAL_SEMAPHORE_WIN32_EXTENSION_NAME,
-    };
-#else
-    static char const *const required_device_extensions[] = {
-        VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME,
-        VK_KHR_EXTERNAL_SEMAPHORE_FD_EXTENSION_NAME,
-    };
-#endif
-    const int required_device_extensions_len =
-        ARRAY_SIZE(required_device_extensions);
-
-    for (int i = 0; i < required_device_extensions_len; i++) {
+    for (int i = 0; i < ARRAY_SIZE(required_device_extensions); i++) {
         if (!is_extension_available(available_extensions,
                                     required_device_extensions[i])) {
             fprintf(stderr, "required device extension not found: %s\n",
                     required_device_extensions[i]);
             return false;
         }
-    }
-#endif
-
-    return true;
-}
-
-static void report_device_incompatibility(VkPhysicalDevice device,
-                                          const char *reason)
-{
-    VkPhysicalDeviceProperties props;
-    vkGetPhysicalDeviceProperties(device, &props);
-
-    fprintf(stderr, "Vulkan device rejected (%s): %s\n", props.deviceName,
-            reason);
-#ifdef __ANDROID__
-    __android_log_print(ANDROID_LOG_WARN, "xemu-android",
-                        "Vulkan device rejected (%s): %s", props.deviceName,
-                        reason);
-#endif
-}
-
-static bool format_already_checked(const VkFormat *formats, size_t count,
-                                   VkFormat format)
-{
-    for (size_t i = 0; i < count; i++) {
-        if (formats[i] == format) {
-            return true;
-        }
-    }
-
-    return false;
-}
-
-static bool check_format_supports_features(VkPhysicalDevice device,
-                                           VkFormat format,
-                                           VkFormatFeatureFlags features)
-{
-    VkFormatProperties props;
-    vkGetPhysicalDeviceFormatProperties(device, format, &props);
-
-    return (props.optimalTilingFeatures & features) == features;
-}
-
-static bool check_image_format_usage_supported(VkPhysicalDevice device,
-                                               VkFormat format,
-                                               VkImageUsageFlags usage)
-{
-    VkPhysicalDeviceImageFormatInfo2 info = {
-        .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_IMAGE_FORMAT_INFO_2,
-        .format = format,
-        .type = VK_IMAGE_TYPE_2D,
-        .tiling = VK_IMAGE_TILING_OPTIMAL,
-        .usage = usage,
-    };
-    VkImageFormatProperties2 props = {
-        .sType = VK_STRUCTURE_TYPE_IMAGE_FORMAT_PROPERTIES_2,
-    };
-
-    return vkGetPhysicalDeviceImageFormatProperties2(device, &info, &props) ==
-           VK_SUCCESS;
-}
-
-static bool check_texture_formats_supported(VkPhysicalDevice device)
-{
-    VkFormat checked_formats[ARRAY_SIZE(kelvin_color_format_vk_map)];
-    size_t num_checked_formats = 0;
-    const VkImageUsageFlags usage =
-        VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
-
-    memset(checked_formats, 0, sizeof(checked_formats));
-
-    for (int i = 0; i < ARRAY_SIZE(kelvin_color_format_vk_map); i++) {
-        VkFormat format = kelvin_color_format_vk_map[i].vk_format;
-
-        if (format == VK_FORMAT_UNDEFINED ||
-            format_already_checked(checked_formats, num_checked_formats,
-                                   format)) {
-            continue;
-        }
-
-        checked_formats[num_checked_formats++] = format;
-
-        if (!check_format_supports_features(device, format,
-                                            VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT) ||
-            !check_image_format_usage_supported(device, format, usage)) {
-            char reason[160];
-
-            snprintf(reason, sizeof(reason),
-                     "sampled texture uploads need VkFormat %d to support "
-                     "optimal sampled images and transfer-dst usage",
-                     format);
-            report_device_incompatibility(device, reason);
-            return false;
-        }
-    }
-
-    return true;
-}
-
-static bool check_surface_format_supported(VkPhysicalDevice device,
-                                           const SurfaceFormatInfo *format)
-{
-    VkImageUsageFlags usage = VK_IMAGE_USAGE_SAMPLED_BIT |
-                              VK_IMAGE_USAGE_TRANSFER_DST_BIT |
-                              VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
-                              format->usage;
-
-    return check_image_format_usage_supported(device, format->vk_format, usage) &&
-           check_format_supports_features(device, format->vk_format,
-                                          VK_FORMAT_FEATURE_BLIT_SRC_BIT |
-                                          VK_FORMAT_FEATURE_BLIT_DST_BIT);
-}
-
-static bool check_surface_formats_supported(VkPhysicalDevice device)
-{
-    VkFormat checked_formats[ARRAY_SIZE(kelvin_surface_color_format_vk_map)];
-    size_t num_checked_formats = 0;
-
-    memset(checked_formats, 0, sizeof(checked_formats));
-
-    for (int i = 0; i < ARRAY_SIZE(kelvin_surface_color_format_vk_map); i++) {
-        const SurfaceFormatInfo *format = &kelvin_surface_color_format_vk_map[i];
-
-        if (!format->host_bytes_per_pixel ||
-            format_already_checked(checked_formats, num_checked_formats,
-                                   format->vk_format)) {
-            continue;
-        }
-
-        checked_formats[num_checked_formats++] = format->vk_format;
-
-        if (!check_surface_format_supported(device, format)) {
-            char reason[192];
-
-            snprintf(reason, sizeof(reason),
-                     "surface format VkFormat %d needs sampled, transfer, "
-                     "attachment, and blit support",
-                     format->vk_format);
-            report_device_incompatibility(device, reason);
-            return false;
-        }
-    }
-
-    if (!check_surface_format_supported(device, &zeta_d16)) {
-        report_device_incompatibility(
-            device,
-            "Z16 surfaces need sampled, transfer, attachment, and blit support");
-        return false;
-    }
-
-    if (!check_surface_format_supported(device, &zeta_d24_unorm_s8_uint) &&
-        !check_surface_format_supported(device, &zeta_d32_sfloat_s8_uint)) {
-        report_device_incompatibility(
-            device,
-            "Z24S8 surfaces need either D24_UNORM_S8_UINT or "
-            "D32_SFLOAT_S8_UINT with sampled, transfer, attachment, and blit "
-            "support");
-        return false;
     }
 
     return true;
@@ -570,15 +579,9 @@ static bool is_device_compatible(VkPhysicalDevice device)
 
     QueueFamilyIndices indices = pgraph_vk_find_queue_families(device);
 
-#ifdef __ANDROID__
     return is_queue_family_indicies_complete(indices) &&
            check_device_support_required_extensions(device);
-#else
-    return is_queue_family_indicies_complete(indices) &&
-           check_device_support_required_extensions(device) &&
-           check_texture_formats_supported(device) &&
-           check_surface_formats_supported(device);
-#endif
+    // FIXME: Check formats
     // FIXME: Check vram
 }
 
@@ -630,33 +633,95 @@ static bool select_physical_device(PGRAPHState *pg, Error **errp)
         }
     }
     if (r->physical_device == VK_NULL_HANDLE) {
-#ifdef __ANDROID__
-        int fallback_index = preferred_device_index >= 0 ? preferred_device_index : 0;
-        r->physical_device = devices[fallback_index];
-        vkGetPhysicalDeviceProperties(r->physical_device, &r->device_props);
-        fprintf(stderr,
-                "Warning: No fully compatible Vulkan GPU found; trying %s anyway\n",
-                r->device_props.deviceName);
-#else
         error_setg(errp, "Failed to find a suitable GPU");
         return false;
-#endif
     }
 
     vkGetPhysicalDeviceProperties(r->physical_device, &r->device_props);
     xemu_settings_set_string(&g_config.display.vulkan.preferred_physical_device,
                              r->device_props.deviceName);
 
-    fprintf(stderr,
-            "Selected physical device: %s\n"
-            "- Vendor: %x, Device: %x\n"
-            "- Driver Version: %d.%d.%d\n",
-            r->device_props.deviceName,
-            r->device_props.vendorID,
-            r->device_props.deviceID,
-            VK_VERSION_MAJOR(r->device_props.driverVersion),
-            VK_VERSION_MINOR(r->device_props.driverVersion),
-            VK_VERSION_PATCH(r->device_props.driverVersion));
+    /*
+     * Query extended driver properties (Vulkan 1.2+) to get the actual
+     * driver name and conformance info.  This is especially useful on
+     * Android where custom GPU drivers (e.g. Turnip) can be injected
+     * at runtime via adrenotools.
+     */
+    if (r->device_props.apiVersion >= VK_API_VERSION_1_2) {
+        VkPhysicalDeviceDriverProperties drv;
+        memset(&drv, 0, sizeof(drv));
+        drv.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRIVER_PROPERTIES;
+        VkPhysicalDeviceProperties2 props2 = {
+            .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2,
+            .pNext = &drv,
+        };
+        vkGetPhysicalDeviceProperties2(r->physical_device, &props2);
+
+        fprintf(stderr,
+                "Selected physical device: %s\n"
+                "- Vendor: %04x, Device: %04x\n"
+                "- API Version: %d.%d.%d\n"
+                "- Driver: %s (%s)\n"
+                "- Driver Version: %d.%d.%d\n",
+                r->device_props.deviceName,
+                r->device_props.vendorID,
+                r->device_props.deviceID,
+                VK_VERSION_MAJOR(r->device_props.apiVersion),
+                VK_VERSION_MINOR(r->device_props.apiVersion),
+                VK_VERSION_PATCH(r->device_props.apiVersion),
+                drv.driverName, drv.driverInfo,
+                VK_VERSION_MAJOR(r->device_props.driverVersion),
+                VK_VERSION_MINOR(r->device_props.driverVersion),
+                VK_VERSION_PATCH(r->device_props.driverVersion));
+
+#ifdef __ANDROID__
+        __android_log_print(ANDROID_LOG_INFO, "xemu-vulkan",
+                            "GPU: %s | Driver: %s (%s) | "
+                            "Vendor: %04x Device: %04x | "
+                            "API: %d.%d.%d | DriverVer: %d.%d.%d",
+                            r->device_props.deviceName,
+                            drv.driverName, drv.driverInfo,
+                            r->device_props.vendorID,
+                            r->device_props.deviceID,
+                            VK_VERSION_MAJOR(r->device_props.apiVersion),
+                            VK_VERSION_MINOR(r->device_props.apiVersion),
+                            VK_VERSION_PATCH(r->device_props.apiVersion),
+                            VK_VERSION_MAJOR(r->device_props.driverVersion),
+                            VK_VERSION_MINOR(r->device_props.driverVersion),
+                            VK_VERSION_PATCH(r->device_props.driverVersion));
+#endif
+        snprintf(g_vulkan_driver_info, sizeof(g_vulkan_driver_info),
+                 "%s (%s)", drv.driverName, drv.driverInfo);
+    } else {
+        fprintf(stderr,
+                "Selected physical device: %s\n"
+                "- Vendor: %04x, Device: %04x\n"
+                "- Driver Version: %d.%d.%d\n",
+                r->device_props.deviceName,
+                r->device_props.vendorID,
+                r->device_props.deviceID,
+                VK_VERSION_MAJOR(r->device_props.driverVersion),
+                VK_VERSION_MINOR(r->device_props.driverVersion),
+                VK_VERSION_PATCH(r->device_props.driverVersion));
+
+#ifdef __ANDROID__
+        __android_log_print(ANDROID_LOG_INFO, "xemu-vulkan",
+                            "GPU: %s | Vendor: %04x Device: %04x | "
+                            "DriverVer: %d.%d.%d (Vulkan <1.2, no driver name)",
+                            r->device_props.deviceName,
+                            r->device_props.vendorID,
+                            r->device_props.deviceID,
+                            VK_VERSION_MAJOR(r->device_props.driverVersion),
+                            VK_VERSION_MINOR(r->device_props.driverVersion),
+                            VK_VERSION_PATCH(r->device_props.driverVersion));
+#endif
+        snprintf(g_vulkan_driver_info, sizeof(g_vulkan_driver_info),
+                 "%s (v%d.%d.%d)",
+                 r->device_props.deviceName,
+                 VK_VERSION_MAJOR(r->device_props.driverVersion),
+                 VK_VERSION_MINOR(r->device_props.driverVersion),
+                 VK_VERSION_PATCH(r->device_props.driverVersion));
+    }
 
     return true;
 }
@@ -719,7 +784,7 @@ static bool create_logical_device(PGRAPHState *pg, Error **errp)
         }
         F(depthClamp, false),
         F(fillModeNonSolid, false),
-        F(geometryShader, false),
+        F(geometryShader, true),
         F(occlusionQueryPrecise, false),
         F(samplerAnisotropy, false),
         F(shaderClipDistance, false),
@@ -738,7 +803,7 @@ static bool create_logical_device(PGRAPHState *pg, Error **errp)
                 desired_features[i].available == VK_TRUE ? "available" : "missing",
                 desired_features[i].required ? " (required)" : "");
 #ifdef __ANDROID__
-        __android_log_print(ANDROID_LOG_INFO, "xemu-android",
+        __android_log_print(ANDROID_LOG_INFO, "hakuX",
                             "vk feature %s: %s%s",
                             desired_features[i].name,
                             desired_features[i].available == VK_TRUE ? "available" : "missing",
@@ -750,7 +815,7 @@ static bool create_logical_device(PGRAPHState *pg, Error **errp)
                     "Error: Device does not support required feature %s\n",
                     desired_features[i].name);
 #ifdef __ANDROID__
-            __android_log_print(ANDROID_LOG_ERROR, "xemu-android",
+            __android_log_print(ANDROID_LOG_ERROR, "hakuX",
                                 "vk required feature missing: %s",
                                 desired_features[i].name);
 #endif
@@ -779,6 +844,125 @@ static bool create_logical_device(PGRAPHState *pg, Error **errp)
 
     void *next_struct = NULL;
 
+    VkPhysicalDeviceExtendedDynamicStateFeaturesEXT eds_features;
+    if (r->extended_dynamic_state_supported &&
+        r->device_props.apiVersion < VK_API_VERSION_1_3) {
+        memset(&eds_features, 0, sizeof(eds_features));
+        eds_features.sType =
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTENDED_DYNAMIC_STATE_FEATURES_EXT;
+        eds_features.extendedDynamicState = VK_TRUE;
+        eds_features.pNext = next_struct;
+        next_struct = &eds_features;
+    }
+
+    VkPhysicalDeviceVulkan13Features vk13_features;
+    if (r->device_props.apiVersion >= VK_API_VERSION_1_3) {
+        memset(&vk13_features, 0, sizeof(vk13_features));
+        vk13_features.sType =
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
+        vk13_features.shaderDemoteToHelperInvocation = VK_TRUE;
+        vk13_features.pNext = next_struct;
+        next_struct = &vk13_features;
+    }
+
+#if OPT_DYNAMIC_BLEND
+    VkPhysicalDeviceExtendedDynamicState3FeaturesEXT eds3_features;
+    if (r->eds3_blend_supported) {
+        memset(&eds3_features, 0, sizeof(eds3_features));
+        eds3_features.sType =
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTENDED_DYNAMIC_STATE_3_FEATURES_EXT;
+
+        VkPhysicalDeviceExtendedDynamicState3FeaturesEXT query = {
+            .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTENDED_DYNAMIC_STATE_3_FEATURES_EXT,
+        };
+        VkPhysicalDeviceFeatures2 features2 = {
+            .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2,
+            .pNext = &query,
+        };
+        vkGetPhysicalDeviceFeatures2(r->physical_device, &features2);
+
+        if (query.extendedDynamicState3ColorBlendEnable &&
+            query.extendedDynamicState3ColorBlendEquation &&
+            query.extendedDynamicState3ColorWriteMask) {
+            eds3_features.extendedDynamicState3ColorBlendEnable = VK_TRUE;
+            eds3_features.extendedDynamicState3ColorBlendEquation = VK_TRUE;
+            eds3_features.extendedDynamicState3ColorWriteMask = VK_TRUE;
+            eds3_features.pNext = next_struct;
+            next_struct = &eds3_features;
+        } else {
+            r->eds3_blend_supported = false;
+        }
+    }
+#endif
+
+#if OPT_BINDLESS_TEXTURES
+    VkPhysicalDeviceDescriptorIndexingFeatures di_features;
+    if (r->bindless_textures_supported) {
+        VkPhysicalDeviceDescriptorIndexingFeatures di_query = {
+            .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_FEATURES,
+        };
+        VkPhysicalDeviceDescriptorIndexingProperties di_props = {
+            .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_PROPERTIES,
+        };
+        VkPhysicalDeviceFeatures2 features2 = {
+            .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2,
+            .pNext = &di_query,
+        };
+        VkPhysicalDeviceProperties2 props2 = {
+            .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2,
+            .pNext = &di_props,
+        };
+        vkGetPhysicalDeviceFeatures2(r->physical_device, &features2);
+        vkGetPhysicalDeviceProperties2(r->physical_device, &props2);
+
+        bool have_all =
+            di_query.descriptorBindingPartiallyBound &&
+            di_query.descriptorBindingSampledImageUpdateAfterBind &&
+            di_props.maxPerStageDescriptorUpdateAfterBindSampledImages >=
+                MAX_BINDLESS_TEXTURES;
+
+        if (have_all) {
+            memset(&di_features, 0, sizeof(di_features));
+            di_features.sType =
+                VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_FEATURES;
+            di_features.descriptorBindingPartiallyBound = VK_TRUE;
+            di_features.descriptorBindingSampledImageUpdateAfterBind = VK_TRUE;
+            di_features.pNext = next_struct;
+            next_struct = &di_features;
+
+            uint32_t max_push = r->device_props.limits.maxPushConstantsSize;
+            if (max_push >= 272) {
+                r->tex_push_offset = 256;
+                r->max_vertex_push_attrs = NV2A_VERTEXSHADER_ATTRIBUTES;
+            } else {
+                r->tex_push_offset = 0;
+                r->max_vertex_push_attrs = NV2A_VERTEXSHADER_ATTRIBUTES - 1;
+            }
+
+            fprintf(stderr, "Bindless textures: enabled (push offset=%u, "
+                    "max vertex attrs=%d, max update-after-bind samplers=%u)\n",
+                    r->tex_push_offset, r->max_vertex_push_attrs,
+                    di_props.maxPerStageDescriptorUpdateAfterBindSampledImages);
+#ifdef __ANDROID__
+            __android_log_print(ANDROID_LOG_INFO, "hakuX",
+                "Bindless textures: enabled (push_offset=%u, max_vtx_attrs=%d)",
+                r->tex_push_offset, r->max_vertex_push_attrs);
+#endif
+        } else {
+            r->bindless_textures_supported = false;
+            fprintf(stderr, "Bindless textures: disabled (missing features: "
+                    "partiallyBound=%d, updateAfterBind=%d, maxSamplers=%u)\n",
+                    di_query.descriptorBindingPartiallyBound,
+                    di_query.descriptorBindingSampledImageUpdateAfterBind,
+                    di_props.maxPerStageDescriptorUpdateAfterBindSampledImages);
+#ifdef __ANDROID__
+            __android_log_print(ANDROID_LOG_INFO, "hakuX",
+                "Bindless textures: disabled (missing features)");
+#endif
+        }
+    }
+#endif
+
     VkPhysicalDeviceCustomBorderColorFeaturesEXT custom_border_features;
     if (r->custom_border_color_extension_enabled) {
         custom_border_features = (VkPhysicalDeviceCustomBorderColorFeaturesEXT){
@@ -806,7 +990,7 @@ static bool create_logical_device(PGRAPHState *pg, Error **errp)
     }
 
 #ifdef __ANDROID__
-    __android_log_print(ANDROID_LOG_INFO, "xemu-android",
+    __android_log_print(ANDROID_LOG_INFO, "hakuX",
                         "vk init stage: vkCreateDevice");
 #endif
     result = vkCreateDevice(r->physical_device, &device_create_info, NULL,
@@ -815,10 +999,41 @@ static bool create_logical_device(PGRAPHState *pg, Error **errp)
         error_setg(errp, "Failed to create logical device (%d)", result);
         return false;
     }
+
+    if (external_capture_layer_active) {
+        fprintf(stderr, "External capture layer active — skipping "
+                        "volkLoadDevice to preserve layer dispatch chain\n");
+    } else {
+        volkLoadDevice(r->device);
+    }
+
 #ifdef __ANDROID__
-    __android_log_print(ANDROID_LOG_INFO, "xemu-android",
+    __android_log_print(ANDROID_LOG_INFO, "hakuX",
                         "vk init stage: vkCreateDevice done");
 #endif
+
+    /* PATCH_EDS1: On Vulkan 1.1 devices with VK_EXT_extended_dynamic_state,
+     * the EXT-named function pointers are valid but the 1.3 core names are
+     * NULL. Copy EXT→core so callers can use the standardized names on any
+     * supported version. */
+#define PATCH_EDS1(core, ext) do { if (!(core)) (core) = (void*)(ext); } while(0)
+    PATCH_EDS1(vkCmdSetCullMode,               vkCmdSetCullModeEXT);
+    PATCH_EDS1(vkCmdSetFrontFace,              vkCmdSetFrontFaceEXT);
+    PATCH_EDS1(vkCmdSetPrimitiveTopology,      vkCmdSetPrimitiveTopologyEXT);
+    PATCH_EDS1(vkCmdSetViewportWithCount,      vkCmdSetViewportWithCountEXT);
+    PATCH_EDS1(vkCmdSetScissorWithCount,       vkCmdSetScissorWithCountEXT);
+    PATCH_EDS1(vkCmdBindVertexBuffers2,        vkCmdBindVertexBuffers2EXT);
+    PATCH_EDS1(vkCmdSetDepthTestEnable,        vkCmdSetDepthTestEnableEXT);
+    PATCH_EDS1(vkCmdSetDepthWriteEnable,       vkCmdSetDepthWriteEnableEXT);
+    PATCH_EDS1(vkCmdSetDepthCompareOp,         vkCmdSetDepthCompareOpEXT);
+    PATCH_EDS1(vkCmdSetDepthBoundsTestEnable,  vkCmdSetDepthBoundsTestEnableEXT);
+    PATCH_EDS1(vkCmdSetStencilTestEnable,      vkCmdSetStencilTestEnableEXT);
+    PATCH_EDS1(vkCmdSetStencilOp,              vkCmdSetStencilOpEXT);
+#undef PATCH_EDS1
+
+    pgraph_init_reg_dynamic_masks(
+        r->extended_dynamic_state_supported,
+        OPT_DYNAMIC_BLEND && r->eds3_blend_supported);
 
     vkGetDeviceQueue(r->device, indices.queue_family, 0, &r->queue);
     return true;
@@ -874,25 +1089,13 @@ static bool init_allocator(PGRAPHState *pg, Error **errp)
         .vkGetPhysicalDeviceMemoryProperties2KHR = vkGetPhysicalDeviceMemoryProperties2,
     };
 
-    const uint32_t device_api_version = r->device_props.apiVersion;
-    const uint32_t vma_compiled_api_version = VK_MAKE_VERSION(
-        (uint32_t)(VMA_VULKAN_VERSION / 1000000),
-        (uint32_t)((VMA_VULKAN_VERSION / 1000) % 1000),
-        (uint32_t)(VMA_VULKAN_VERSION % 1000));
-    uint32_t vma_api_version = device_api_version;
+    uint32_t device_api_version = r->device_props.apiVersion;
 
-    if (vma_api_version > vma_compiled_api_version) {
-        vma_api_version = vma_compiled_api_version;
-#ifdef __ANDROID__
-        __android_log_print(ANDROID_LOG_WARN, "xemu-android",
-                            "Clamping VMA API version %u.%u.%u to %u.%u.%u",
-                            VK_API_VERSION_MAJOR(device_api_version),
-                            VK_API_VERSION_MINOR(device_api_version),
-                            VK_API_VERSION_PATCH(device_api_version),
-                            VK_API_VERSION_MAJOR(vma_api_version),
-                            VK_API_VERSION_MINOR(vma_api_version),
-                            VK_API_VERSION_PATCH(vma_api_version));
-#endif
+    /* Clamp to VK_API_VERSION_1_3 -- VMA may be compiled without 1.4
+     * header support and will assert if given a higher version. xemu only
+     * requires Vulkan 1.1 features anyway. */
+    if (device_api_version > VK_API_VERSION_1_3) {
+        device_api_version = VK_API_VERSION_1_3;
     }
 
     if (device_api_version >= VK_API_VERSION_1_3) {
@@ -906,7 +1109,10 @@ static bool init_allocator(PGRAPHState *pg, Error **errp)
         .flags = (r->memory_budget_extension_enabled ?
                       VMA_ALLOCATOR_CREATE_EXT_MEMORY_BUDGET_BIT :
                       0),
-        .vulkanApiVersion = vma_api_version,
+#ifdef __ANDROID__
+        .preferredLargeHeapBlockSize = 64 * 1024 * 1024,
+#endif
+        .vulkanApiVersion = device_api_version,
         .instance = r->instance,
         .physicalDevice = r->physical_device,
         .device = r->device,
@@ -914,7 +1120,7 @@ static bool init_allocator(PGRAPHState *pg, Error **errp)
     };
 
 #ifdef __ANDROID__
-    __android_log_print(ANDROID_LOG_INFO, "xemu-android",
+    __android_log_print(ANDROID_LOG_INFO, "hakuX",
                         "vk init stage: vmaCreateAllocator");
 #endif
     result = vmaCreateAllocator(&create_info, &r->allocator);
@@ -923,7 +1129,7 @@ static bool init_allocator(PGRAPHState *pg, Error **errp)
         return false;
     }
 #ifdef __ANDROID__
-    __android_log_print(ANDROID_LOG_INFO, "xemu-android",
+    __android_log_print(ANDROID_LOG_INFO, "hakuX",
                         "vk init stage: vmaCreateAllocator done");
 #endif
 
@@ -935,28 +1141,32 @@ void pgraph_vk_init_instance(PGRAPHState *pg, Error **errp)
     bool ok = false;
 
 #ifdef __ANDROID__
-    __android_log_print(ANDROID_LOG_INFO, "xemu-android",
+    __android_log_print(ANDROID_LOG_INFO, "hakuX",
                         "vk init stage: create_instance");
 #endif
     if (!create_instance(pg, errp)) {
         goto done;
     }
 #ifdef __ANDROID__
-    __android_log_print(ANDROID_LOG_INFO, "xemu-android",
+    __android_log_print(ANDROID_LOG_INFO, "hakuX",
                         "vk init stage: select_physical_device");
 #endif
     if (!select_physical_device(pg, errp)) {
         goto done;
     }
+
+    pgraph_vk_set_glslang_target(
+        pg->vk_renderer_state->device_props.apiVersion);
+
 #ifdef __ANDROID__
-    __android_log_print(ANDROID_LOG_INFO, "xemu-android",
+    __android_log_print(ANDROID_LOG_INFO, "hakuX",
                         "vk init stage: create_logical_device");
 #endif
     if (!create_logical_device(pg, errp)) {
         goto done;
     }
 #ifdef __ANDROID__
-    __android_log_print(ANDROID_LOG_INFO, "xemu-android",
+    __android_log_print(ANDROID_LOG_INFO, "hakuX",
                         "vk init stage: init_allocator");
 #endif
     if (!init_allocator(pg, errp)) {
@@ -968,7 +1178,7 @@ void pgraph_vk_init_instance(PGRAPHState *pg, Error **errp)
 done:
     if (ok) {
 #ifdef __ANDROID__
-        __android_log_print(ANDROID_LOG_INFO, "xemu-android",
+        __android_log_print(ANDROID_LOG_INFO, "hakuX",
                             "vk init stage: complete");
 #endif
         return;

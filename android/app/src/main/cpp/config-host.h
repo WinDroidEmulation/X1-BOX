@@ -8,7 +8,6 @@
 #define CONFIG_SDL 1
 #define CONFIG_SDL2 1
 #define CONFIG_AUDIO_SDL 1
-#define CONFIG_SLIRP 1
 #define CONFIG_AUDIO_DRIVERS "sdl",
 #define CONFIG_DEVICES "config-devices.h"
 
@@ -26,6 +25,7 @@
 
 #define CONFIG_TCG 1
 #define CONFIG_SOFTMMU 1
+#define CONFIG_MEMBARRIER 1
 
 #define CONFIG_IOVEC 1
 

@@ -31,14 +31,6 @@ void pgraph_update_inline_value(VertexAttribute *attr, const uint8_t *data)
 
     switch (attr->format) {
         case NV097_SET_VERTEX_DATA_ARRAY_FORMAT_TYPE_UB_D3D:
-            if (attr->count == 4) {
-                attr->inline_value[0] = (float)data[2] / 255.0f;
-                attr->inline_value[1] = (float)data[1] / 255.0f;
-                attr->inline_value[2] = (float)data[0] / 255.0f;
-                attr->inline_value[3] = (float)data[3] / 255.0f;
-                break;
-            }
-            /* Fall back to direct copy for unexpected non-BGRA cases. */
         case NV097_SET_VERTEX_DATA_ARRAY_FORMAT_TYPE_UB_OGL:
             for (uint32_t i = 0; i < attr->count; ++i) {
                 attr->inline_value[i] = (float)data[i] / 255.0f;

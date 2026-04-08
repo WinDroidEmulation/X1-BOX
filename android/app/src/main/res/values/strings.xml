@@ -38,17 +38,18 @@
   <string name="setup_disc_value">Games Folder: %1$s</string>
 
   <string name="library_title">Game Library</string>
-  <string name="library_boot_dashboard">Boot Dashboard</string>
+  <string name="library_boot_dashboard">Dashboard</string>
   <string name="library_boot_dashboard_note">Requires a hard drive image with the Microsoft dashboard installed. Barebones HDD layouts will not work.</string>
   <string name="library_snapshots">Snapshots</string>
-  <string name="library_convert_iso">Convert ISO to XISO</string>
+  <string name="library_convert_iso">ISO  ›  XISO</string>
   <string name="library_view_list">List</string>
-  <string name="library_view_cover_grid">Cover Grid</string>
+  <string name="library_view_cover_grid">Covers</string>
   <string name="library_box_art_lookup">Look up box art online</string>
-  <string name="library_long_press_hint">Press and hold on a game for more options.</string>
+  <string name="library_long_press_hint">Press and hold on game for options.</string>
   <string name="library_no_folder">No folder selected</string>
   <string name="library_loading_games">Scanning games...</string>
   <string name="library_converting_game">Converting %1$s...</string>
+  <string name="library_converting_game_percent">Converting %1$s… %2$d%%</string>
   <string name="library_empty_games">No supported games found in this folder.</string>
   <string name="library_convert_pick_title">Select ISO to convert</string>
   <string name="library_convert_none">No .iso files found to convert.</string>
@@ -100,7 +101,7 @@
 
   <string name="settings_title">Settings</string>
   <string name="settings_save">Save</string>
-  <string name="settings_redo_setup_wizard">Redo Setup Wizard</string>
+  <string name="settings_redo_setup_wizard">Setup Wizard</string>
 
   <string name="settings_section_display">Display</string>
   <string name="settings_graphics_api">Graphics API</string>
@@ -112,13 +113,23 @@
   <string name="settings_vsync">VSync</string>
   <string name="frontend_launch_setup_required">Finish core setup before launching from a frontend.</string>
   <string name="frontend_launch_unresolved">Could not access that game from the frontend intent. Pick the same folder in x1box first, or use a content URI.</string>
-  <string name="settings_section_vulkan_driver">Custom Vulkan Driver</string>
-  <string name="settings_vulkan_driver_none">System Default</string>
-  <string name="settings_vulkan_driver_browse">Browse…</string>
-  <string name="settings_vulkan_driver_clear">Clear</string>
-  <string name="settings_vulkan_driver_hint">For Adreno GPUs with Turnip/Mesa. Pick a driver .so or .zip package. Restart required.</string>
-  <string name="settings_vulkan_driver_pick_error">Pick a Vulkan driver .so or .zip file.</string>
-  <string name="settings_vulkan_driver_import_failed">Failed to import the custom Vulkan driver: %1$s</string>
+  <string name="settings_gpu_driver_title">GPU Driver</string>
+  <string name="settings_gpu_driver_desc">Use a custom Vulkan driver for better performance or compatibility on Adreno devices.</string>
+  <string name="settings_gpu_driver_system">Active driver: System default</string>
+  <string name="settings_gpu_driver_active">Active driver: %1$s</string>
+  <string name="settings_gpu_driver_not_supported">Custom GPU driver loading is not supported on this device.</string>
+  <string name="settings_gpu_driver_install">Install Driver from ZIP</string>
+  <string name="settings_gpu_driver_select">Select Driver</string>
+  <string name="settings_gpu_driver_select_title">Select a GPU Driver</string>
+  <string name="settings_gpu_driver_reset">Use System Driver</string>
+  <string name="settings_gpu_driver_reset_title">Reset GPU Driver</string>
+  <string name="settings_gpu_driver_reset_message">Revert to the system default GPU driver? The change takes effect on next launch.</string>
+  <string name="settings_gpu_driver_reset_done">GPU driver reset to system default. Restart the app to apply.</string>
+  <string name="settings_gpu_driver_installed">Driver installed successfully. Restart the app to apply.</string>
+  <string name="settings_gpu_driver_install_failed">Failed to install driver. The ZIP may be invalid or incompatible.</string>
+  <string name="settings_gpu_driver_none_available">No driver ZIPs found. Use \"Install Driver from ZIP\" to add one first.</string>
+  <string name="settings_gpu_driver_option_system">System Driver</string>
+  <string name="settings_gpu_driver_option_custom">Custom Driver</string>
   <string name="settings_display_mode">Aspect Ratio</string>
   <string name="settings_display_mode_stretch">Stretch</string>
   <string name="settings_display_mode_4_3">4:3</string>
@@ -147,6 +158,9 @@
   <string name="settings_hard_fpu">Hardware FPU</string>
   <string name="settings_cache_shaders">Shader Cache</string>
   <string name="settings_skip_boot_anim">Skip startup animation</string>
+  <string name="settings_draw_reorder">Draw Call Reordering</string>
+  <string name="settings_draw_merge">Draw Call Merging</string>
+  <string name="settings_async_compile">Async Shader Compile</string>
 
   <string name="settings_section_audio">Audio</string>
   <string name="settings_use_dsp">Real-time DSP Processing</string>
@@ -159,7 +173,7 @@
   <string name="settings_online_enable">Enable online networking (Insignia)</string>
   <string name="settings_online_hint">Turns on NAT networking for dashboards and Insignia. Use the helper buttons below to write the DNS preset and boot the Setup Assistant.</string>
   <string name="settings_insignia_guide_action">Insignia Guide</string>
-  <string name="settings_insignia_sign_up_action">Sign Up With Insignia</string>
+  <string name="settings_insignia_sign_up_action">Insignia Sign Up</string>
   <string name="settings_insignia_prepare_action">Prepare Insignia Networking</string>
   <string name="settings_insignia_register_action">Register With Setup Assistant</string>
   <string name="settings_insignia_status_checking">Checking Insignia setup...</string>
@@ -252,7 +266,7 @@
   <string name="settings_hdd_layout_unavailable_not_enough_space">This HDD image does not have enough usable space for that layout.</string>
   <string name="settings_hdd_init_title">Initialize HDD Layout</string>
   <string name="settings_hdd_init_message">Initialize the current HDD image with %1$s?\n\n%2$s\n\nImage: %3$s</string>
-  <string name="settings_hdd_init_action">Initialize HDD Layout</string>
+  <string name="settings_hdd_init_action">Initialize HDD</string>
   <string name="settings_hdd_init_working">Initializing HDD...</string>
   <string name="settings_hdd_init_success">HDD layout initialized</string>
   <string name="settings_hdd_init_failed">Failed to initialize HDD: %1$s</string>
@@ -276,6 +290,7 @@
   <string name="settings_dashboard_import_boot_alias_note">Boot compatibility: this import did not include C:\\xboxdash.xbe, so %1$s will also be copied as xboxdash.xbe.</string>
   <string name="settings_dashboard_import_boot_missing_note">Warning: no obvious dashboard XBE was found anywhere under C:. Boot Dashboard may still show the service screen.</string>
   <string name="settings_section_maintenance">Maintenance</string>
+  <string name="settings_show_fps">Show FPS counter</string>
   <string name="settings_debug_logs_enable">Enable Debug Logs</string>
   <string name="settings_debug_logs_hint">Writes extra UI and emulator bootstrap logs only while enabled. Turn this on before reproducing a problem, then export the log.</string>
   <string name="settings_export_debug_log_action">Export Debug Log</string>
@@ -286,7 +301,7 @@
   <string name="settings_clear_debug_log_success">Debug log cleared</string>
   <string name="settings_clear_debug_log_empty">Debug log is already clear.</string>
   <string name="settings_emulator_files_hint">Back up or restore hdd.img, xemu.toml, eeprom.bin, flash.bin, and mcpx.bin. Export creates one ZIP package. Import accepts either a ZIP or files with those exact names.</string>
-  <string name="settings_import_emulator_files_action">Import Emulator Files</string>
+  <string name="settings_import_emulator_files_action">Import Files</string>
   <string name="settings_import_emulator_files_message">Importing replaces matching local emulator files and reloads this settings screen. Unsaved changes on this page will be discarded.</string>
   <string name="settings_import_emulator_files_continue">Choose Source</string>
   <string name="settings_import_emulator_files_source_title">Choose Import Source</string>
@@ -301,7 +316,7 @@
   <string name="settings_import_emulator_files_success">Imported: %1$s</string>
   <string name="settings_import_emulator_files_failed">Failed to import emulator files: %1$s</string>
   <string name="settings_import_emulator_files_unknown_error">unknown error</string>
-  <string name="settings_export_emulator_files_action">Export Emulator Files</string>
+  <string name="settings_export_emulator_files_action">Export Files</string>
   <string name="settings_export_emulator_files_empty">No emulator files are available to export yet.</string>
   <string name="settings_export_emulator_files_working">Exporting emulator files...</string>
   <string name="settings_export_emulator_files_open_failed">Could not open the selected export location.</string>

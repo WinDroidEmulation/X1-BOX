@@ -393,6 +393,16 @@ static struct {
 void xemu_android_process_snapshot_request(void)
 {
     if (SDL_AtomicCAS(&g_reboot_pending, 1, 0)) {
+        /* The in-game menu pauses the VM via vm_stop(RUN_STATE_PAUSED), which
+         * disables CPU ticks. qemu_system_reset_request goes through
+         * pause_all_vcpus+qemu_system_reset+resume_all_vcpus but never calls
+         * cpu_enable_ticks — so time stays frozen after the reset. Call
+         * vm_start() first to re-enable ticks and put the VM in RUNNING state
+         * before the reset fires. The BQL is held here (we're inside
+         * sdl2_gl_refresh). */
+        if (!runstate_is_running()) {
+            vm_start();
+        }
         qemu_system_reset_request(SHUTDOWN_CAUSE_GUEST_RESET);
         return;
     }

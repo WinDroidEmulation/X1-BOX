@@ -12,6 +12,7 @@ object PerGameSettingsManager {
   private const val RUNTIME_KEY_PREFIX = "runtime_override_"
 
   val overridablePreferenceKeys = listOf(
+    "setting_gpu_driver",
     "setting_renderer",
     "setting_filtering",
     "setting_vsync",
@@ -27,6 +28,9 @@ object PerGameSettingsManager {
     "setting_skip_boot_anim",
     "setting_audio_driver",
     "setting_network_enable",
+    "draw_reorder",
+    "draw_merge",
+    "async_compile",
   )
 
   fun hasOverrides(context: Context, relativePath: String): Boolean {

@@ -32,7 +32,7 @@ static void android_log_gl_errors(const char *ctx)
     GLenum err;
 
     while ((err = glGetError()) != GL_NO_ERROR) {
-        __android_log_print(ANDROID_LOG_WARN, "xemu-android",
+        __android_log_print(ANDROID_LOG_WARN, "hakuX",
                             "GL error 0x%X at %s", err, ctx);
     }
 }
@@ -285,7 +285,7 @@ void pgraph_gl_init_buffers(NV2AState *d)
     PGRAPHState *pg = &d->pgraph;
     PGRAPHGLState *r = pg->gl_renderer_state;
 
-    lru_init(&r->element_cache);
+    lru_init(&r->element_cache, 1 << 16);
     r->element_cache_entries = g_malloc_n(element_cache_size, sizeof(VertexLruNode));
     assert(r->element_cache_entries != NULL);
     GLuint element_cache_buffers[element_cache_size];

@@ -38,7 +38,7 @@ static void android_log_gl_errors(const char *ctx)
     GLenum err;
 
     while ((err = glGetError()) != GL_NO_ERROR) {
-        __android_log_print(ANDROID_LOG_WARN, "xemu-android",
+        __android_log_print(ANDROID_LOG_WARN, "hakuX",
                             "GL error 0x%X at %s", err, ctx);
     }
 }
@@ -52,7 +52,7 @@ static void android_log_texture_stage_errors(int unit, const char *stage,
     while ((err = glGetError()) != GL_NO_ERROR) {
         if (shape) {
             __android_log_print(
-                ANDROID_LOG_WARN, "xemu-android",
+                ANDROID_LOG_WARN, "hakuX",
                 "GL error 0x%X at pgraph_gl_bind_textures[%d]: %s "
                 "target=0x%X dim=%u fmt=0x%X levels=%u border=%d cubemap=%d",
                 err, unit, stage, gl_target, shape->dimensionality,
@@ -60,7 +60,7 @@ static void android_log_texture_stage_errors(int unit, const char *stage,
                 shape->cubemap);
         } else {
             __android_log_print(
-                ANDROID_LOG_WARN, "xemu-android",
+                ANDROID_LOG_WARN, "hakuX",
                 "GL error 0x%X at pgraph_gl_bind_textures[%d]: %s "
                 "target=0x%X",
                 err, unit, stage, gl_target);
@@ -449,7 +449,7 @@ static void pgraph_gl_log_invalid_texture_range(NV2AState *d,
                  shape->dimensionality, shape->color_format, shape->levels,
                  shape->border, shape->cubemap);
 #ifdef __ANDROID__
-    __android_log_print(ANDROID_LOG_WARN, "xemu-android",
+    __android_log_print(ANDROID_LOG_WARN, "hakuX",
                         "Skipping %s for stage %d: offset=0x%" HWADDR_PRIx
                         " length=0x%zx vram=0x%" HWADDR_PRIx
                         " dim=%u fmt=0x%X levels=%u border=%d cubemap=%d",
@@ -619,7 +619,8 @@ static void apply_texture_parameters(PGRAPHGLState *r,
                             wrap_t);
             binding->addrv = addrv;
         }
-        needs_border_color = needs_border_color || binding->addrv == NV_PGRAPH_TEXADDRESS0_ADDRU_BORDER;
+        needs_border_color = needs_border_color
+                             || binding->addrv == NV_PGRAPH_TEXADDRESS0_ADDRU_BORDER;
     }
     if (dimensionality > 2) {
         if (addrp != binding->addrp) {
@@ -635,7 +636,8 @@ static void apply_texture_parameters(PGRAPHGLState *r,
                             wrap_r);
             binding->addrp = addrp;
         }
-        needs_border_color = needs_border_color || binding->addrp == NV_PGRAPH_TEXADDRESS0_ADDRU_BORDER;
+        needs_border_color = needs_border_color
+                             || binding->addrp == NV_PGRAPH_TEXADDRESS0_ADDRU_BORDER;
     }
 
     if (r->supported_extensions.texture_filter_anisotropic) {
@@ -1460,7 +1462,7 @@ void pgraph_gl_init_textures(NV2AState *d)
     PGRAPHGLState *r = pg->gl_renderer_state;
 
     const size_t texture_cache_size = 512;
-    lru_init(&r->texture_cache);
+    lru_init(&r->texture_cache, 1024);
     r->texture_cache_entries = malloc(texture_cache_size * sizeof(TextureLruNode));
     assert(r->texture_cache_entries != NULL);
     for (int i = 0; i < texture_cache_size; i++) {

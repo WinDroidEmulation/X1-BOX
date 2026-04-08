@@ -49,7 +49,7 @@ static void gl_log_errors(const char *ctx)
     }
 
     while ((gl_err = glGetError()) != GL_NO_ERROR) {
-        __android_log_print(ANDROID_LOG_WARN, "xemu-android",
+        __android_log_print(ANDROID_LOG_WARN, "hakuX",
             "GL error 0x%X at %s", gl_err, ctx);
     }
 }

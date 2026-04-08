@@ -3,11 +3,16 @@ package com.izzy2lost.x1box
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
+import android.graphics.Color
+import android.graphics.Typeface
 import android.hardware.input.InputManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.os.Process
+import android.util.TypedValue
 import android.view.Gravity
 import android.view.InputDevice
 import android.view.KeyEvent
@@ -26,6 +31,7 @@ import android.widget.ListView
 import android.widget.RelativeLayout
 import android.widget.TextView
 import android.widget.Toast
+import androidx.core.content.ContextCompat
 import androidx.core.widget.NestedScrollView
 import com.google.android.material.button.MaterialButton
 import androidx.appcompat.app.AlertDialog
@@ -36,6 +42,7 @@ import java.io.File
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import kotlin.math.max
+import kotlin.math.roundToInt
 
 class MainActivity : SDLActivity(), InputManager.InputDeviceListener {
   companion object {
@@ -61,10 +68,63 @@ class MainActivity : SDLActivity(), InputManager.InputDeviceListener {
   private var startButtonDown = false
   private var selectButtonDown = false
   private var comboTriggered = false
+  private var suspendedByLifecycle = false
+  private var resumeEmulationOnMenuDismiss = false
   private var startupSnapshotSlot: Int? = null
   private var startupSnapshotLoadScheduled = false
-  @Volatile private var processTerminationScheduled = false
   private lateinit var swipeUpGestureRecognizer: SwipeUpGestureRecognizer
+  private var fpsTextView: TextView? = null
+  private val fpsHandler = Handler(Looper.getMainLooper())
+  private val fpsUpdateInterval = 1000L
+  private val fpsRunnable = object : Runnable {
+    override fun run() {
+      fpsTextView?.text = "FPS: ${nativeGetFps()}"
+      fpsHandler.postDelayed(this, fpsUpdateInterval)
+    }
+  }
+
+  override fun loadLibraries() {
+    super.loadLibraries()
+    initializeGpuDriver()
+  }
+
+  private fun initializeGpuDriver() {
+    GpuDriverHelper.init(this)
+    if (!GpuDriverHelper.supportsCustomDriverLoading()) {
+      android.util.Log.i(TAG, "GPU driver: custom loading not supported on this device")
+      return
+    }
+    val override = PerGameSettingsManager.getRuntimeOverride(this, "setting_gpu_driver")
+    when {
+      override == null -> {
+        // No per-game override — global behavior
+        val driverLib = GpuDriverHelper.getInstalledDriverLibrary()
+        if (driverLib != null) {
+          android.util.Log.i(TAG, "GPU driver: loading custom driver=$driverLib")
+          GpuDriverHelper.initializeDriver(driverLib)
+        } else {
+          android.util.Log.i(TAG, "GPU driver: no custom driver installed, initializing system driver via adrenotools")
+          GpuDriverHelper.initializeDriver()
+        }
+      }
+      override == "system" -> {
+        android.util.Log.i(TAG, "GPU driver: per-game override → system driver")
+        GpuDriverHelper.initializeDriver()
+      }
+      else -> {
+        // ZIP basename of a specific driver in storage dir
+        val zipFile = java.io.File(GpuDriverHelper.driverStorageDir, override)
+        if (zipFile.exists() && GpuDriverHelper.installDriver(zipFile)) {
+          val libName = GpuDriverHelper.getInstalledDriverLibrary()
+          android.util.Log.i(TAG, "GPU driver: per-game override → $override (lib=$libName)")
+          GpuDriverHelper.initializeDriver(libName)
+        } else {
+          android.util.Log.w(TAG, "GPU driver: per-game $override not found or install failed, falling back to system")
+          GpuDriverHelper.initializeDriver()
+        }
+      }
+    }
+  }
 
   override fun createSDLSurface(context: Context): SDLSurface {
     return super.createSDLSurface(context).apply {
@@ -79,6 +139,9 @@ class MainActivity : SDLActivity(), InputManager.InputDeviceListener {
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
     DebugLog.initialize(this)
+    val rendererPref = getSharedPreferences("x1box_prefs", Context.MODE_PRIVATE)
+      .getString("setting_renderer", "vulkan") ?: "vulkan"
+    nativeSetenv("XEMU_RENDERER", rendererPref)
     OrientationLocker(this, landscapeOnly = true).enable()
     window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
     val requestedSlot = intent?.getIntExtra(EXTRA_AUTO_LOAD_SNAPSHOT_SLOT, 0) ?: 0
@@ -87,6 +150,7 @@ class MainActivity : SDLActivity(), InputManager.InputDeviceListener {
     }
     initializeSwipeMenuGesture()
     setupOnScreenController()
+    setupFpsOverlay()
     setupControllerDetection()
     hideSystemUI()
   }
@@ -95,6 +159,7 @@ class MainActivity : SDLActivity(), InputManager.InputDeviceListener {
     super.onWindowFocusChanged(hasFocus)
     if (hasFocus) {
       hideSystemUI()
+      updateFpsOverlayPosition()
     } else {
       // Release all on-screen inputs when the window loses focus (e.g. a system
       // gesture panel, notification shade, or dialog appears). Without this,
@@ -203,8 +268,64 @@ class MainActivity : SDLActivity(), InputManager.InputDeviceListener {
     updateControllerVisibility()
   }
 
+  private fun setupFpsOverlay() {
+    fpsTextView = TextView(this).apply {
+      text = "FPS: --"
+      setTextColor(ContextCompat.getColor(this@MainActivity, R.color.xemu_green))
+      setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
+      typeface = Typeface.MONOSPACE
+      setShadowLayer(2f, 1f, 1f, Color.BLACK)
+      setPadding(16, 8, 16, 8)
+      setBackgroundColor(Color.argb(100, 0, 0, 0))
+      maxLines = 1
+      visibility = View.GONE
+    }
+    val params = RelativeLayout.LayoutParams(
+      RelativeLayout.LayoutParams.WRAP_CONTENT,
+      RelativeLayout.LayoutParams.WRAP_CONTENT
+    ).apply {
+      addRule(RelativeLayout.ALIGN_PARENT_TOP)
+      addRule(RelativeLayout.ALIGN_PARENT_START)
+    }
+    mLayout?.addView(fpsTextView, params)
+    updateFpsOverlayPosition()
+  }
+
+  private fun updateFpsOverlayPosition() {
+    val hostLayout = mLayout ?: return
+    val fpsView = fpsTextView ?: return
+
+    fpsView.post {
+      val hostWidth = hostLayout.width.toFloat()
+      if (hostWidth <= 0f) {
+        return@post
+      }
+
+      // Match the LT button geometry from OnScreenController so the overlay
+      // stays tucked just to its right even as the screen size changes.
+      val shoulderButtonRadius = hostWidth * 0.034f
+      val shoulderEdgeMargin = shoulderButtonRadius + hostWidth * 0.02f
+      val leftTriggerRightEdge = shoulderEdgeMargin + shoulderButtonRadius
+      val triggerTopEdge = shoulderEdgeMargin - shoulderButtonRadius
+      val gapPx = TypedValue.applyDimension(
+        TypedValue.COMPLEX_UNIT_DIP,
+        10f,
+        resources.displayMetrics
+      ).roundToInt()
+
+      val params = fpsView.layoutParams as? RelativeLayout.LayoutParams ?: return@post
+      params.leftMargin = leftTriggerRightEdge.roundToInt() + gapPx
+      params.topMargin = triggerTopEdge.roundToInt()
+      fpsView.layoutParams = params
+    }
+  }
+
   override fun onResume() {
     super.onResume()
+    if (suspendedByLifecycle) {
+      nativeResumeEmulation()
+      suspendedByLifecycle = false
+    }
     OrientationLocker(this, landscapeOnly = true).enable()
     window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
     mLayout?.keepScreenOn = true
@@ -215,14 +336,35 @@ class MainActivity : SDLActivity(), InputManager.InputDeviceListener {
       registerVirtualController()
     }, 1000)
 
+    val showFps = getSharedPreferences("x1box_prefs", MODE_PRIVATE)
+      .getBoolean("show_fps", false)
+    fpsTextView?.visibility = if (showFps) View.VISIBLE else View.GONE
+    fpsHandler.removeCallbacks(fpsRunnable)
+    if (showFps) {
+      fpsHandler.postDelayed(fpsRunnable, fpsUpdateInterval)
+    }
+
+    updateFpsOverlayPosition()
     scheduleStartupSnapshotLoadIfRequested()
   }
 
   override fun onPause() {
+    fpsHandler.removeCallbacks(fpsRunnable)
     swipeUpGestureRecognizer.reset()
     onScreenController?.resetAllInputs()
     controllerBridge?.reset()
+    resumeEmulationOnMenuDismiss = false
+    suspendedByLifecycle = true
+    nativePauseEmulation()
     super.onPause()
+  }
+
+  private fun resumeEmulationIfSafe() {
+    val destroyed =
+      Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR1 && isDestroyed
+    if (!suspendedByLifecycle && !isFinishing && !destroyed) {
+      nativeResumeEmulation()
+    }
   }
 
   private fun scheduleStartupSnapshotLoadIfRequested() {
@@ -334,14 +476,11 @@ class MainActivity : SDLActivity(), InputManager.InputDeviceListener {
 
   override fun onDestroy() {
     DebugLog.i(TAG) { "onDestroy()" }
+    fpsHandler.removeCallbacks(fpsRunnable)
     swipeUpGestureRecognizer.reset()
+    resumeEmulationOnMenuDismiss = false
     inGameMenuDialog?.dismiss()
     inGameMenuDialog = null
-    val shouldTerminateProcess = isFinishing && !isChangingConfigurations
-
-    if (shouldTerminateProcess) {
-      terminateXemuProcessSoon("activity finish")
-    }
 
     // Unregister virtual controller
     try {
@@ -443,6 +582,10 @@ class MainActivity : SDLActivity(), InputManager.InputDeviceListener {
   private external fun nativeSaveSnapshot(name: String): Boolean
   private external fun nativeLoadSnapshot(name: String): Boolean
   private external fun nativeRebootSystem()
+  private external fun nativeGetFps(): Int
+  private external fun nativePauseEmulation()
+  private external fun nativeResumeEmulation()
+  private external fun nativeExitEmulation()
 
   private fun slotName(slot: Int) = "android_slot_$slot"
 
@@ -637,6 +780,8 @@ class MainActivity : SDLActivity(), InputManager.InputDeviceListener {
           if (ok) getString(R.string.snapshot_loaded, slot) else getString(R.string.snapshot_load_failed, slot)
         }
         Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
+        hideSystemUI()
+        resumeEmulationIfSafe()
       }
     }.start()
   }
@@ -645,6 +790,7 @@ class MainActivity : SDLActivity(), InputManager.InputDeviceListener {
     val previews = loadSnapshotSlotPreviews()
     val listView = ListView(this)
     lateinit var dialog: AlertDialog
+    var operationStarted = false
 
     val adapter = object : BaseAdapter() {
       override fun getCount(): Int = previews.size
@@ -684,6 +830,7 @@ class MainActivity : SDLActivity(), InputManager.InputDeviceListener {
     listView.adapter = adapter
     listView.setOnItemClickListener { _, _, position, _ ->
       val slot = previews[position].slot
+      operationStarted = true
       dialog.dismiss()
       runSnapshotOperation(slot, save)
     }
@@ -695,6 +842,12 @@ class MainActivity : SDLActivity(), InputManager.InputDeviceListener {
       )
       .setView(listView)
       .setNegativeButton(android.R.string.cancel, null)
+      .setOnDismissListener {
+        hideSystemUI()
+        if (!operationStarted) {
+          resumeEmulationIfSafe()
+        }
+      }
       .create()
 
     dialog.show()
@@ -709,14 +862,22 @@ class MainActivity : SDLActivity(), InputManager.InputDeviceListener {
   }
 
   private fun showRebootSystemConfirmation() {
+    var confirmed = false
     MaterialAlertDialogBuilder(this, R.style.ThemeOverlay_Xemu_RoundedDialog)
       .setTitle(R.string.in_game_menu_reboot_title)
       .setMessage(R.string.in_game_menu_reboot_message)
       .setPositiveButton(R.string.in_game_menu_reboot_action) { _, _ ->
+        confirmed = true
         onScreenController?.resetAllInputs()
         nativeRebootSystem()
       }
       .setNegativeButton(android.R.string.cancel, null)
+      .setOnDismissListener {
+        hideSystemUI()
+        if (!confirmed) {
+          resumeEmulationIfSafe()
+        }
+      }
       .show()
   }
 
@@ -725,6 +886,8 @@ class MainActivity : SDLActivity(), InputManager.InputDeviceListener {
     if (inGameMenuDialog?.isShowing == true) {
       return
     }
+    nativePauseEmulation()
+    resumeEmulationOnMenuDismiss = true
 
     val dp = resources.displayMetrics.density
     val verticalButtonSpacing = (8 * dp).toInt()
@@ -732,6 +895,7 @@ class MainActivity : SDLActivity(), InputManager.InputDeviceListener {
     lateinit var dialog: androidx.appcompat.app.AlertDialog
     data class MenuButtonSpec(
       val label: String,
+      val resumeAfterDismiss: Boolean = true,
       val action: () -> Unit,
     )
 
@@ -747,6 +911,7 @@ class MainActivity : SDLActivity(), InputManager.InputDeviceListener {
         isSingleLine = false
         maxLines = 2
         setOnClickListener {
+          resumeEmulationOnMenuDismiss = spec.resumeAfterDismiss
           dialog.dismiss()
           spec.action()
         }
@@ -804,19 +969,34 @@ class MainActivity : SDLActivity(), InputManager.InputDeviceListener {
     ) {
       toggleOnScreenController()
     }
-    val saveStateButton = MenuButtonSpec(getString(R.string.in_game_menu_save_state)) {
+    val saveStateButton = MenuButtonSpec(
+      getString(R.string.in_game_menu_save_state),
+      resumeAfterDismiss = false
+    ) {
       showSaveStateDialog()
     }
-    val loadStateButton = MenuButtonSpec(getString(R.string.in_game_menu_load_state)) {
+    val loadStateButton = MenuButtonSpec(
+      getString(R.string.in_game_menu_load_state),
+      resumeAfterDismiss = false
+    ) {
       showLoadStateDialog()
     }
-    val rebootButton = MenuButtonSpec(getString(R.string.in_game_menu_reboot_system)) {
+    val rebootButton = MenuButtonSpec(
+      getString(R.string.in_game_menu_reboot_system),
+      resumeAfterDismiss = false
+    ) {
       showRebootSystemConfirmation()
     }
-    val exitToLibraryButton = MenuButtonSpec(getString(R.string.in_game_menu_exit_to_library)) {
+    val exitToLibraryButton = MenuButtonSpec(
+      getString(R.string.in_game_menu_exit_to_library),
+      resumeAfterDismiss = false
+    ) {
       exitToGameLibrary()
     }
-    val quitAppButton = MenuButtonSpec(getString(R.string.in_game_menu_quit_app)) {
+    val quitAppButton = MenuButtonSpec(
+      getString(R.string.in_game_menu_quit_app),
+      resumeAfterDismiss = false
+    ) {
       quitApp()
     }
 
@@ -848,6 +1028,10 @@ class MainActivity : SDLActivity(), InputManager.InputDeviceListener {
       .setOnDismissListener {
         inGameMenuDialog = null
         hideSystemUI()
+        if (resumeEmulationOnMenuDismiss) {
+          resumeEmulationIfSafe()
+        }
+        resumeEmulationOnMenuDismiss = false
       }
       .create()
 
@@ -865,34 +1049,17 @@ class MainActivity : SDLActivity(), InputManager.InputDeviceListener {
   }
 
   private fun exitToGameLibrary() {
+    nativeExitEmulation()
     val intent = Intent(this, GameLibraryActivity::class.java).apply {
       addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
     }
     startActivity(intent)
-    terminateXemuProcessSoon("exit to library")
     finish()
   }
 
   private fun quitApp() {
-    terminateXemuProcessSoon("quit app")
+    nativeExitEmulation()
     finishAffinity()
-  }
-
-  private fun terminateXemuProcessSoon(reason: String) {
-    if (processTerminationScheduled) {
-      return
-    }
-    processTerminationScheduled = true
-
-    Thread {
-      try {
-        Thread.sleep(350)
-      } catch (_: InterruptedException) {
-        Thread.currentThread().interrupt()
-      }
-      DebugLog.i(TAG) { "Terminating :xemu process after $reason" }
-      Process.killProcess(Process.myPid())
-    }.start()
   }
 
   override fun getLibraries(): Array<String> = arrayOf(

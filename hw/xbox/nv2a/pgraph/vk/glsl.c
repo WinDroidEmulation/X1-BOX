@@ -19,10 +19,48 @@
 
 #include "ui/xemu-settings.h"
 #include "renderer.h"
+#include "qemu/fast-hash.h"
 
 #include <assert.h>
 #include <glslang/Include/glslang_c_interface.h>
 #include <stdio.h>
+#include <sys/stat.h>
+
+#ifdef __ANDROID__
+#include <android/log.h>
+#define GLSL_ERR(...) __android_log_print(ANDROID_LOG_ERROR, "xemu-glsl", __VA_ARGS__)
+#else
+#define GLSL_ERR(...) fprintf(stderr, __VA_ARGS__)
+#endif
+
+static void dump_glsl_failure(const char *phase, const char *info_log,
+                              const char *debug_log, const char *source)
+{
+    GLSL_ERR("GLSL %s failed", phase);
+    if (info_log && info_log[0])
+        GLSL_ERR("[INFO]: %s", info_log);
+    if (debug_log && debug_log[0])
+        GLSL_ERR("[DEBUG]: %s", debug_log);
+
+    if (source) {
+        const char *p = source;
+        int line = 1;
+        while (*p) {
+            const char *eol = strchr(p, '\n');
+            if (!eol) eol = p + strlen(p);
+            int len = (int)(eol - p);
+            GLSL_ERR("%4d| %.*s", line, len, p);
+            if (!*eol) break;
+            p = eol + 1;
+            line++;
+        }
+    }
+}
+
+static glslang_target_client_version_t g_glslang_client_version =
+    GLSLANG_TARGET_VULKAN_1_1;
+static glslang_target_language_version_t g_glslang_spv_version =
+    GLSLANG_TARGET_SPV_1_3;
 
 static const glslang_resource_t
     resource_limits = { .max_lights = 32,
@@ -140,6 +178,20 @@ void pgraph_vk_finalize_glsl_compiler(void)
     glslang_finalize_process();
 }
 
+void pgraph_vk_set_glslang_target(uint32_t device_api_version)
+{
+    if (device_api_version >= VK_MAKE_API_VERSION(0, 1, 3, 0)) {
+        g_glslang_client_version = GLSLANG_TARGET_VULKAN_1_3;
+        g_glslang_spv_version = GLSLANG_TARGET_SPV_1_6;
+    } else if (device_api_version >= VK_MAKE_API_VERSION(0, 1, 2, 0)) {
+        g_glslang_client_version = GLSLANG_TARGET_VULKAN_1_2;
+        g_glslang_spv_version = GLSLANG_TARGET_SPV_1_5;
+    } else {
+        g_glslang_client_version = GLSLANG_TARGET_VULKAN_1_1;
+        g_glslang_spv_version = GLSLANG_TARGET_SPV_1_3;
+    }
+}
+
 GByteArray *pgraph_vk_compile_glsl_to_spv(glslang_stage_t stage,
                                           const char *glsl_source)
 {
@@ -147,9 +199,9 @@ GByteArray *pgraph_vk_compile_glsl_to_spv(glslang_stage_t stage,
         .language = GLSLANG_SOURCE_GLSL,
         .stage = stage,
         .client = GLSLANG_CLIENT_VULKAN,
-        .client_version = GLSLANG_TARGET_VULKAN_1_3,
+        .client_version = g_glslang_client_version,
         .target_language = GLSLANG_TARGET_SPV,
-        .target_language_version = GLSLANG_TARGET_SPV_1_6,
+        .target_language_version = g_glslang_spv_version,
         .code = glsl_source,
         .default_version = 460,
         .default_profile = GLSLANG_NO_PROFILE,
@@ -162,28 +214,19 @@ GByteArray *pgraph_vk_compile_glsl_to_spv(glslang_stage_t stage,
     glslang_shader_t *shader = glslang_shader_create(&input);
 
     if (!glslang_shader_preprocess(shader, &input)) {
-        fprintf(stderr,
-                "GLSL preprocessing failed\n"
-                "[INFO]: %s\n"
-                "[DEBUG]: %s\n"
-                "%s\n",
-                glslang_shader_get_info_log(shader),
-                glslang_shader_get_info_debug_log(shader), input.code);
-        assert(!"glslang preprocess failed");
+        dump_glsl_failure("preprocessing",
+                          glslang_shader_get_info_log(shader),
+                          glslang_shader_get_info_debug_log(shader),
+                          input.code);
         glslang_shader_delete(shader);
         return NULL;
     }
 
     if (!glslang_shader_parse(shader, &input)) {
-        fprintf(stderr,
-                "GLSL parsing failed\n"
-                "[INFO]: %s\n"
-                "[DEBUG]: %s\n"
-                "%s\n",
-                glslang_shader_get_info_log(shader),
-                glslang_shader_get_info_debug_log(shader),
-                glslang_shader_get_preprocessed_code(shader));
-        assert(!"glslang parse failed");
+        dump_glsl_failure("parsing",
+                          glslang_shader_get_info_log(shader),
+                          glslang_shader_get_info_debug_log(shader),
+                          glslang_shader_get_preprocessed_code(shader));
         glslang_shader_delete(shader);
         return NULL;
     }
@@ -193,13 +236,10 @@ GByteArray *pgraph_vk_compile_glsl_to_spv(glslang_stage_t stage,
 
     if (!glslang_program_link(program, GLSLANG_MSG_SPV_RULES_BIT |
                                            GLSLANG_MSG_VULKAN_RULES_BIT)) {
-        fprintf(stderr,
-                "GLSL linking failed\n"
-                "[INFO]: %s\n"
-                "[DEBUG]: %s\n",
-                glslang_program_get_info_log(program),
-                glslang_program_get_info_debug_log(program));
-        assert(!"glslang link failed");
+        dump_glsl_failure("linking",
+                          glslang_program_get_info_log(program),
+                          glslang_program_get_info_debug_log(program),
+                          NULL);
         glslang_program_delete(program);
         glslang_shader_delete(shader);
         return NULL;
@@ -364,14 +404,73 @@ static glslang_stage_t vk_shader_stage_to_glslang_stage(VkShaderStageFlagBits st
     }
 }
 
+static char *spv_cache_dir;
+
+static void ensure_spv_cache_dir(void)
+{
+    if (spv_cache_dir) {
+        return;
+    }
+    spv_cache_dir =
+        g_strdup_printf("%sspv_cache", xemu_settings_get_base_path());
+    g_mkdir_with_parents(spv_cache_dir, 0755);
+}
+
+static GByteArray *spv_cache_load(uint64_t hash)
+{
+    ensure_spv_cache_dir();
+    char *path = g_strdup_printf("%s/%016" PRIx64 ".spv", spv_cache_dir, hash);
+    gchar *data = NULL;
+    gsize len = 0;
+    gboolean ok = g_file_get_contents(path, &data, &len, NULL);
+    g_free(path);
+    if (!ok || len < 4) {
+        g_free(data);
+        return NULL;
+    }
+    return g_byte_array_new_take((guint8 *)data, len);
+}
+
+static void spv_cache_store(uint64_t hash, GByteArray *spv)
+{
+    ensure_spv_cache_dir();
+    char *path = g_strdup_printf("%s/%016" PRIx64 ".spv", spv_cache_dir, hash);
+    g_file_set_contents(path, (const gchar *)spv->data, spv->len, NULL);
+    g_free(path);
+}
+
 ShaderModuleInfo *pgraph_vk_create_shader_module_from_glsl(
     PGRAPHVkState *r, VkShaderStageFlagBits stage, const char *glsl)
 {
     ShaderModuleInfo *info = g_malloc0(sizeof(*info));
     info->refcnt = 0;
     info->glsl = strdup(glsl);
-    info->spirv = pgraph_vk_compile_glsl_to_spv(
-        vk_shader_stage_to_glslang_stage(stage), glsl);
+
+    if (g_config.perf.cache_shaders) {
+        uint64_t hash = fast_hash((const uint8_t *)glsl, strlen(glsl));
+        GByteArray *cached = spv_cache_load(hash);
+        if (cached) {
+            info->spirv = cached;
+            g_nv2a_stats.shader_stats.spv_cache_hits++;
+        } else {
+            info->spirv = pgraph_vk_compile_glsl_to_spv(
+                vk_shader_stage_to_glslang_stage(stage), glsl);
+            if (info->spirv) {
+                spv_cache_store(hash, info->spirv);
+            }
+            g_nv2a_stats.shader_stats.spv_cache_misses++;
+        }
+    } else {
+        info->spirv = pgraph_vk_compile_glsl_to_spv(
+            vk_shader_stage_to_glslang_stage(stage), glsl);
+    }
+
+    if (!info->spirv) {
+        free(info->glsl);
+        g_free(info);
+        return NULL;
+    }
+
     info->module = pgraph_vk_create_shader_module_from_spv(r, info->spirv);
     init_layout_from_spv(info);
     return info;
@@ -389,6 +488,7 @@ static void finalize_uniform_layout(ShaderUniformLayout *layout)
 
 void pgraph_vk_ref_shader_module(ShaderModuleInfo *info)
 {
+    if (!info) return;
     info->refcnt++;
 }
 
