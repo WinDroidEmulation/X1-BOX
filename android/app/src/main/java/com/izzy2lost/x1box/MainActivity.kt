@@ -3,11 +3,16 @@ package com.izzy2lost.x1box
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
+import android.graphics.Color
+import android.graphics.Typeface
 import android.hardware.input.InputManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.os.Process
+import android.util.TypedValue
 import android.view.Gravity
 import android.view.InputDevice
 import android.view.KeyEvent
@@ -26,6 +31,7 @@ import android.widget.ListView
 import android.widget.RelativeLayout
 import android.widget.TextView
 import android.widget.Toast
+import androidx.core.content.ContextCompat
 import androidx.core.widget.NestedScrollView
 import com.google.android.material.button.MaterialButton
 import androidx.appcompat.app.AlertDialog
@@ -36,6 +42,7 @@ import java.io.File
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import kotlin.math.max
+import kotlin.math.roundToInt
 
 class MainActivity : SDLActivity(), InputManager.InputDeviceListener {
   companion object {
@@ -66,6 +73,15 @@ class MainActivity : SDLActivity(), InputManager.InputDeviceListener {
   private var startupSnapshotSlot: Int? = null
   private var startupSnapshotLoadScheduled = false
   private lateinit var swipeUpGestureRecognizer: SwipeUpGestureRecognizer
+  private var fpsTextView: TextView? = null
+  private val fpsHandler = Handler(Looper.getMainLooper())
+  private val fpsUpdateInterval = 1000L
+  private val fpsRunnable = object : Runnable {
+    override fun run() {
+      fpsTextView?.text = "FPS: ${nativeGetFps()}"
+      fpsHandler.postDelayed(this, fpsUpdateInterval)
+    }
+  }
 
   override fun loadLibraries() {
     super.loadLibraries()
@@ -134,6 +150,7 @@ class MainActivity : SDLActivity(), InputManager.InputDeviceListener {
     }
     initializeSwipeMenuGesture()
     setupOnScreenController()
+    setupFpsOverlay()
     setupControllerDetection()
     hideSystemUI()
   }
@@ -142,6 +159,7 @@ class MainActivity : SDLActivity(), InputManager.InputDeviceListener {
     super.onWindowFocusChanged(hasFocus)
     if (hasFocus) {
       hideSystemUI()
+      updateFpsOverlayPosition()
     } else {
       // Release all on-screen inputs when the window loses focus (e.g. a system
       // gesture panel, notification shade, or dialog appears). Without this,
@@ -250,6 +268,58 @@ class MainActivity : SDLActivity(), InputManager.InputDeviceListener {
     updateControllerVisibility()
   }
 
+  private fun setupFpsOverlay() {
+    fpsTextView = TextView(this).apply {
+      text = "FPS: --"
+      setTextColor(ContextCompat.getColor(this@MainActivity, R.color.xemu_green))
+      setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
+      typeface = Typeface.MONOSPACE
+      setShadowLayer(2f, 1f, 1f, Color.BLACK)
+      setPadding(16, 8, 16, 8)
+      setBackgroundColor(Color.argb(100, 0, 0, 0))
+      maxLines = 1
+      visibility = View.GONE
+    }
+    val params = RelativeLayout.LayoutParams(
+      RelativeLayout.LayoutParams.WRAP_CONTENT,
+      RelativeLayout.LayoutParams.WRAP_CONTENT
+    ).apply {
+      addRule(RelativeLayout.ALIGN_PARENT_TOP)
+      addRule(RelativeLayout.ALIGN_PARENT_START)
+    }
+    mLayout?.addView(fpsTextView, params)
+    updateFpsOverlayPosition()
+  }
+
+  private fun updateFpsOverlayPosition() {
+    val hostLayout = mLayout ?: return
+    val fpsView = fpsTextView ?: return
+
+    fpsView.post {
+      val hostWidth = hostLayout.width.toFloat()
+      if (hostWidth <= 0f) {
+        return@post
+      }
+
+      // Match the LT button geometry from OnScreenController so the overlay
+      // stays tucked just to its right even as the screen size changes.
+      val shoulderButtonRadius = hostWidth * 0.034f
+      val shoulderEdgeMargin = shoulderButtonRadius + hostWidth * 0.02f
+      val leftTriggerRightEdge = shoulderEdgeMargin + shoulderButtonRadius
+      val triggerTopEdge = shoulderEdgeMargin - shoulderButtonRadius
+      val gapPx = TypedValue.applyDimension(
+        TypedValue.COMPLEX_UNIT_DIP,
+        10f,
+        resources.displayMetrics
+      ).roundToInt()
+
+      val params = fpsView.layoutParams as? RelativeLayout.LayoutParams ?: return@post
+      params.leftMargin = leftTriggerRightEdge.roundToInt() + gapPx
+      params.topMargin = triggerTopEdge.roundToInt()
+      fpsView.layoutParams = params
+    }
+  }
+
   override fun onResume() {
     super.onResume()
     if (suspendedByLifecycle) {
@@ -266,10 +336,20 @@ class MainActivity : SDLActivity(), InputManager.InputDeviceListener {
       registerVirtualController()
     }, 1000)
 
+    val showFps = getSharedPreferences("x1box_prefs", MODE_PRIVATE)
+      .getBoolean("show_fps", false)
+    fpsTextView?.visibility = if (showFps) View.VISIBLE else View.GONE
+    fpsHandler.removeCallbacks(fpsRunnable)
+    if (showFps) {
+      fpsHandler.postDelayed(fpsRunnable, fpsUpdateInterval)
+    }
+
+    updateFpsOverlayPosition()
     scheduleStartupSnapshotLoadIfRequested()
   }
 
   override fun onPause() {
+    fpsHandler.removeCallbacks(fpsRunnable)
     swipeUpGestureRecognizer.reset()
     onScreenController?.resetAllInputs()
     controllerBridge?.reset()
@@ -396,6 +476,7 @@ class MainActivity : SDLActivity(), InputManager.InputDeviceListener {
 
   override fun onDestroy() {
     DebugLog.i(TAG) { "onDestroy()" }
+    fpsHandler.removeCallbacks(fpsRunnable)
     swipeUpGestureRecognizer.reset()
     resumeEmulationOnMenuDismiss = false
     inGameMenuDialog?.dismiss()
@@ -501,6 +582,7 @@ class MainActivity : SDLActivity(), InputManager.InputDeviceListener {
   private external fun nativeSaveSnapshot(name: String): Boolean
   private external fun nativeLoadSnapshot(name: String): Boolean
   private external fun nativeRebootSystem()
+  private external fun nativeGetFps(): Int
   private external fun nativePauseEmulation()
   private external fun nativeResumeEmulation()
   private external fun nativeExitEmulation()

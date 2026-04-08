@@ -873,9 +873,17 @@
             android:textColor="@color/xemu_green_light" />
 
           <com.google.android.material.materialswitch.MaterialSwitch
+            android:id="@+id/switch_show_fps"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/settings_show_fps"
+            android:textColor="@color/xemu_text_muted" />
+
+          <com.google.android.material.materialswitch.MaterialSwitch
             android:id="@+id/switch_debug_logs"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
             android:text="@string/settings_debug_logs_enable"
             android:textColor="@color/xemu_text_muted" />
 

@@ -290,6 +290,7 @@
   <string name="settings_dashboard_import_boot_alias_note">Boot compatibility: this import did not include C:\\xboxdash.xbe, so %1$s will also be copied as xboxdash.xbe.</string>
   <string name="settings_dashboard_import_boot_missing_note">Warning: no obvious dashboard XBE was found anywhere under C:. Boot Dashboard may still show the service screen.</string>
   <string name="settings_section_maintenance">Maintenance</string>
+  <string name="settings_show_fps">Show FPS counter</string>
   <string name="settings_debug_logs_enable">Enable Debug Logs</string>
   <string name="settings_debug_logs_hint">Writes extra UI and emulator bootstrap logs only while enabled. Turn this on before reproducing a problem, then export the log.</string>
   <string name="settings_export_debug_log_action">Export Debug Log</string>
