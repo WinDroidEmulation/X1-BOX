@@ -50,6 +50,9 @@ jobs:
           echo "$HOME/.cargo/bin" >> $GITHUB_PATH
           rustup target add aarch64-linux-android
 
+      - name: Set Rust optimization
+        run: echo "RUSTFLAGS=-C opt-level=3" >> $GITHUB_ENV
+
       - name: Setup Gradle memory
         run: |
           mkdir -p ~/.gradle
@@ -76,7 +79,7 @@ jobs:
           gradle = Path("android/app/build.gradle.kts")
           s = gradle.read_text()
 
-          s = s.replace("-O2", "-O2 -DNDEBUG")
+          s = s.replace("-O2", "-O3 -DNDEBUG")
 
           s = s.replace(
               '-DCMAKE_SHARED_LINKER_FLAGS=-Wl,--gc-sections"',
@@ -90,7 +93,7 @@ jobs:
               )
 
           gradle.write_text(s)
-          print("CLEAN OPTIMIZATION + DNDEBUG DONE")
+          print("O3 + DNDEBUG + STRIP DONE")
           PY
 
       - name: Build APK
