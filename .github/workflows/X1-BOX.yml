@@ -102,20 +102,55 @@ jobs:
           chmod +x gradlew
           ./gradlew clean assembleRelease
 
-      - name: Rename APK
+      - name: Detect App Name + Version (auto)
         run: |
-          APK=$(find android/app/build/outputs/apk/release -name "*release*.apk" ! -name "*unsigned*" | head -n 1)
-          mv "$APK" app.apk
-          echo "APK=app.apk" >> $GITHUB_ENV
+          set -e
+
+          GRADLE="android/app/build.gradle.kts"
+          STRINGS="android/app/src/main/res/values/strings.xml"
+
+          VERSION_NAME=$(grep -m1 -E 'versionName\s*=' "$GRADLE" | sed -E 's/.*"([^"]+)".*/\1/')
+          APP_NAME=$(grep -m1 -E '<string\s+name="app_name"\s*>' "$STRINGS" | sed -E 's/.*>([^<]+)<\/string>.*/\1/')
+
+          APP_NAME_SAFE=$(echo "$APP_NAME" | tr ' ' '-' | tr -cd 'A-Za-z0-9._-')
+
+          echo "VERSION_NAME=$VERSION_NAME" >> $GITHUB_ENV
+          echo "APP_NAME_SAFE=$APP_NAME_SAFE" >> $GITHUB_ENV
+
+          echo "App: $APP_NAME"
+          echo "Version: $VERSION_NAME"
+
+      - name: Get signed APK from Gradle (rename)
+        run: |
+          set -e
+          APK_DIR="android/app/build/outputs/apk/release"
+
+          echo "Searching APK..."
+          find android/app/build/outputs -name "*.apk"
+
+          SRC_APK=$(find "$APK_DIR" -type f -name "*release*.apk" ! -name "*unsigned*" | head -n 1)
+
+          if [ -z "$SRC_APK" ]; then
+            echo "No signed APK found!"
+            find android/app/build/outputs/apk -type f -name "*.apk" || true
+            exit 1
+          fi
+
+          FINAL_APK="$APK_DIR/${APP_NAME_SAFE}-${VERSION_NAME}.apk"
+
+          echo "Found APK: $SRC_APK"
+          mv "$SRC_APK" "$FINAL_APK"
+
+          echo "SIGNED_APK=$FINAL_APK" >> $GITHUB_ENV
 
       - name: Verify APK
-        run: $ANDROID_SDK_ROOT/build-tools/36.1.0/apksigner verify app.apk
+        run: $ANDROID_SDK_ROOT/build-tools/36.1.0/apksigner verify "${{ env.SIGNED_APK }}"
 
       - name: Upload Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: release-${{ github.run_number }}
           name: Release
-          files: app.apk
+          files: ${{ env.SIGNED_APK }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
