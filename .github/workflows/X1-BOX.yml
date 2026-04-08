@@ -76,13 +76,13 @@ jobs:
           gradle = Path("android/app/build.gradle.kts")
           s = gradle.read_text()
 
-          # strip-all (not in gradle)
+          s = s.replace("-O2", "-O2 -DNDEBUG")
+
           s = s.replace(
               '-DCMAKE_SHARED_LINKER_FLAGS=-Wl,--gc-sections"',
               '-DCMAKE_SHARED_LINKER_FLAGS=-Wl,--gc-sections,--strip-all"'
           )
 
-          # release debug symbols remove (safe)
           if "debugSymbolLevel" not in s:
               s = s.replace(
                   "release {",
@@ -90,7 +90,7 @@ jobs:
               )
 
           gradle.write_text(s)
-          print("CLEAN OPTIMIZATION DONE")
+          print("CLEAN OPTIMIZATION + DNDEBUG DONE")
           PY
 
       - name: Build APK
