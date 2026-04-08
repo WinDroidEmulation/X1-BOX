@@ -126,12 +126,6 @@ jobs:
           org.gradle.caching=true
           EOF
 
-      ##- name: Patch NDK prebuilt host tag
-      ## shell: bash
-      ##  run: |
-      ##   set -e
-      ##   grep -RIl "windows-x86_64" android | xargs -r sed -i 's/windows-x86_64/linux-x86_64/g'
-
       - name: Delete .cxx
         run: |
           rm -rf android/app/.cxx
