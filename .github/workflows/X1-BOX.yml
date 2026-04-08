@@ -7,7 +7,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: x1box-signed-release
+  group: x1-box-signed
   cancel-in-progress: false
 
 jobs:
@@ -42,6 +42,7 @@ jobs:
             "ndk;29.0.14206865"
           echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/29.0.14206865" >> $GITHUB_ENV
           echo "ANDROID_NDK_ROOT=$ANDROID_SDK_ROOT/ndk/29.0.14206865" >> $GITHUB_ENV
+
       - name: Install Linux build tools
         run: |
           sudo apt-get update
@@ -53,7 +54,16 @@ jobs:
             python3-pip \
             python3-setuptools \
             curl \
-            unzip
+            unzip \
+            pngcrush \
+            optipng
+
+      - name: Compress PNG assets (SAFE)
+        run: |
+          echo "Compressing PNGs..."
+          find android/app/src/main/res -name "*.png" -exec pngcrush -ow {} \;
+          find android/app/src/main/res -name "*.png" -exec optipng -o7 {} \;
+
       - name: Install Rust (rustup + cargo)
         shell: bash
         run: |
@@ -64,12 +74,17 @@ jobs:
           echo "$HOME/.cargo/bin" >> $GITHUB_PATH
           rustc --version
           cargo --version
+
+      - name: Set Rust optimization
+        run: echo "RUSTFLAGS=-C opt-level=3" >> $GITHUB_ENV
+
       - name: Add Rust Android target (arm64)
         shell: bash
         run: |
           set -e
           rustup target add aarch64-linux-android
           rustup target list --installed
+
       - name: Export Android toolchain for cargo
         shell: bash
         run: |
@@ -77,6 +92,7 @@ jobs:
           echo "CC_aarch64_linux_android=$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang" >> $GITHUB_ENV
           echo "CXX_aarch64_linux_android=$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang++" >> $GITHUB_ENV
           echo "AR_aarch64_linux_android=$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar" >> $GITHUB_ENV
+
       - name: Detect App Name + Version (auto)
         id: meta
         shell: bash
@@ -90,6 +106,7 @@ jobs:
           echo "VERSION_NAME=$VERSION_NAME" >> $GITHUB_ENV
           echo "APP_NAME=$APP_NAME" >> $GITHUB_ENV
           echo "APP_NAME_SAFE=$APP_NAME_SAFE" >> $GITHUB_ENV
+
       - name: Remove org.gradle.java.home (force setup-java)
         shell: bash
         run: |
@@ -99,6 +116,7 @@ jobs:
               sed -i '/^\s*org\.gradle\.java\.home\s*=/d' "$f"
             fi
           done
+
       - name: Fix DEFAULT_JVM_OPTS in gradlew
         shell: bash
         run: |
@@ -106,6 +124,7 @@ jobs:
           if [ -f android/gradlew ]; then
             sed -i 's/^DEFAULT_JVM_OPTS=.*/DEFAULT_JVM_OPTS="-Xmx2g -Xms256m"/' android/gradlew || true
           fi
+
       - name: Improve Gradle memory
         run: |
           mkdir -p "$HOME/.gradle"
@@ -115,16 +134,12 @@ jobs:
           org.gradle.parallel=true
           org.gradle.caching=true
           EOF
-      ##- name: Patch NDK prebuilt host tag
-      ## shell: bash
-      ##  run: |
-      ##   set -e
-      ##   grep -RIl "windows-x86_64" android | xargs -r sed -i 's/windows-x86_64/linux-x86_64/g'
 
       - name: Delete .cxx
         run: |
           rm -rf android/app/.cxx
           rm -rf android/app/build
+
       - name: Decode keystore
         run: echo "${{ secrets.ANDROID_KEYSTORE_B64 }}" | base64 -d > android/app/release.jks
 
@@ -136,93 +151,37 @@ jobs:
             echo "keyAlias=${{ secrets.ANDROID_KEY_ALIAS }}"
             echo "keyPassword=${{ secrets.ANDROID_KEY_PASSWORD }}"
           } > android/key.properties
+
       - name: Apply size optimizations in build.gradle.kts
         shell: bash
         run: |
           set -e
-          FILE="android/app/build.gradle.kts"
           python3 - <<'PY'
           from pathlib import Path
-          import re
           p = Path("android/app/build.gradle.kts")
-          s = p.read_text(encoding="utf-8")
-          changed = False
-          replacements = {
-              '-DCMAKE_C_FLAGS_RELWITHDEBINFO=-O3 -g0 -march=armv8-a+simd -fvisibility=hidden -ffunction-sections -fdata-sections':
-              '-DCMAKE_C_FLAGS_RELWITHDEBINFO=-O3 -DNDEBUG -g0 -march=armv8-a+simd -fvisibility=hidden -ffunction-sections -fdata-sections',
-              '-DCMAKE_CXX_FLAGS_RELWITHDEBINFO=-O3 -g0 -march=armv8-a+simd -fvisibility=hidden -ffunction-sections -fdata-sections':
-              '-DCMAKE_CXX_FLAGS_RELWITHDEBINFO=-O3 -DNDEBUG -g0 -march=armv8-a+simd -fvisibility=hidden -ffunction-sections -fdata-sections',
-              '-DCMAKE_C_FLAGS_RELEASE=-O3 -g0 -march=armv8-a+simd -fvisibility=hidden -ffunction-sections -fdata-sections':
-              '-DCMAKE_C_FLAGS_RELEASE=-O3 -DNDEBUG -g0 -march=armv8-a+simd -fvisibility=hidden -ffunction-sections -fdata-sections',
-              '-DCMAKE_CXX_FLAGS_RELEASE=-O3 -g0 -march=armv8-a+simd -fvisibility=hidden -ffunction-sections -fdata-sections':
-              '-DCMAKE_CXX_FLAGS_RELEASE=-O3 -DNDEBUG -g0 -march=armv8-a+simd -fvisibility=hidden -ffunction-sections -fdata-sections',
-              '-DCMAKE_SHARED_LINKER_FLAGS=-Wl,--gc-sections"':
-              '-DCMAKE_SHARED_LINKER_FLAGS=-Wl,--gc-sections,-s"',
-          }
-          for old, new in replacements.items():
-              if old in s:
-                  s = s.replace(old, new)
-                  changed = True
-          release_match = re.search(r'release\s*\{.*?\n\s*\}', s, re.DOTALL)
-          if release_match:
-              release_block = release_match.group(0)
-              if 'debugSymbolLevel = "NONE"' not in release_block:
-                  new_release_block = re.sub(
-                      r'(release\s*\{\n)',
-                      r'\1      ndk {\n        debugSymbolLevel = "NONE"\n      }\n',
-                      release_block,
-                      count=1
-                  )
-                  s = s.replace(release_block, new_release_block, 1)
-                  changed = True
-          packaging_match = re.search(r'packaging\s*\{.*?\n\s*\}', s, re.DOTALL)
-          if packaging_match:
-              packaging_block = packaging_match.group(0)
-              updated_packaging = packaging_block
-              if 'jniLibs {' not in updated_packaging:
-                  updated_packaging = re.sub(
-                      r'(packaging\s*\{\n)',
-                      r'\1    jniLibs {\n      useLegacyPackaging = false\n    }\n',
-                      updated_packaging,
-                      count=1
-                  )
-              excludes_pattern = r'resources\.excludes\s*\+=\s*setOf\((.*?)\)'
-              m = re.search(excludes_pattern, updated_packaging, re.DOTALL)
-              if m:
-                  block = m.group(1)
-                  extras = [
-                      '"**/*.txt"',
-                      '"**/*.html"',
-                      '"**/*.js"',
-                      '"META-INF/AL2.0"',
-                      '"META-INF/LGPL2.1"',
-                  ]
-                  missing = [x for x in extras if x not in block]
-                  if missing:
-                      insert = ",\n      " + ",\n      ".join(missing)
-                      updated_full = m.group(0).replace(m.group(1), block + insert)
-                      updated_packaging = updated_packaging.replace(m.group(0), updated_full, 1)
-              if updated_packaging != packaging_block:
-                  s = s.replace(packaging_block, updated_packaging, 1)
-                  changed = True
-          p.write_text(s, encoding="utf-8")
-          if not changed:
-              print("Warning: no matching lines found; nothing changed.")
-          else:
-              print("Size optimization patch applied successfully.")
+          s = p.read_text()
+
+          if "-O2" in s:
+              s = s.replace("-O2", "-O3 -DNDEBUG")
+
+          s = s.replace("--gc-sections\"", "--gc-sections,-s\"")
+
+          p.write_text(s)
+          print("O3 + DNDEBUG + STRIP APPLIED")
           PY
-          echo "==== verify patched lines ===="
-          grep -nE 'DNDEBUG|gc-sections,-s|debugSymbolLevel = "NONE"|useLegacyPackaging|META-INF/AL2.0|META-INF/LGPL2.1|\*\*/\*\.txt|\*\*/\*\.html|\*\*/\*\.js' "$FILE" || true
+
       - name: Build Release APK
         working-directory: android
         run: |
           chmod +x gradlew
           ./gradlew --no-daemon clean :app:assembleRelease
+
       - name: Set unique Release Tag
         run: |
           BASE="${APP_NAME_SAFE}-${VERSION_NAME}"
           echo "REL_TAG=$BASE" >> $GITHUB_ENV
           echo "REL_NAME=$BASE" >> $GITHUB_ENV
+
       - name: Get signed APK from Gradle (rename)
         run: |
           set -e
@@ -235,9 +194,11 @@ jobs:
           fi
           mv "$SRC_APK" "$FINAL_APK"
           echo "SIGNED_APK=$FINAL_APK" >> $GITHUB_ENV
+
       - name: Verify signed APK
         run: |
           "$ANDROID_SDK_ROOT/build-tools/36.1.0/apksigner" verify --verbose "${{ env.SIGNED_APK }}"
+
       - name: Create GitHub Release + Upload APK
         uses: softprops/action-gh-release@v2
         with:
