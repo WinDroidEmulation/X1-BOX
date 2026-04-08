@@ -68,7 +68,7 @@ jobs:
           echo "keyAlias=${{ secrets.ANDROID_KEY_ALIAS }}" >> android/key.properties
           echo "keyPassword=${{ secrets.ANDROID_KEY_PASSWORD }}" >> android/key.properties
 
-      - name: Apply optimizations
+      - name: Apply safe optimizations
         run: |
           python3 - <<'PY'
           from pathlib import Path
@@ -76,16 +76,13 @@ jobs:
           gradle = Path("android/app/build.gradle.kts")
           s = gradle.read_text()
 
-          # LTO + O3
-          s = s.replace("-O3", "-O3 -DNDEBUG -flto")
-
-          # strip-all
+          # strip-all (not in gradle)
           s = s.replace(
               '-DCMAKE_SHARED_LINKER_FLAGS=-Wl,--gc-sections"',
               '-DCMAKE_SHARED_LINKER_FLAGS=-Wl,--gc-sections,--strip-all"'
           )
 
-          # remove debug symbols
+          # release debug symbols remove (safe)
           if "debugSymbolLevel" not in s:
               s = s.replace(
                   "release {",
@@ -93,7 +90,7 @@ jobs:
               )
 
           gradle.write_text(s)
-          print("SAFE OPTIMIZATION DONE")
+          print("CLEAN OPTIMIZATION DONE")
           PY
 
       - name: Build APK
