@@ -156,6 +156,24 @@ class PerGameSettingsActivity : AppCompatActivity() {
         options = booleanOptions(),
       ),
       SettingField(
+        key = "draw_reorder",
+        inputLayoutId = R.id.input_per_game_draw_reorder,
+        dropdownId = R.id.dropdown_per_game_draw_reorder,
+        options = booleanOptions(),
+      ),
+      SettingField(
+        key = "draw_merge",
+        inputLayoutId = R.id.input_per_game_draw_merge,
+        dropdownId = R.id.dropdown_per_game_draw_merge,
+        options = booleanOptions(),
+      ),
+      SettingField(
+        key = "async_compile",
+        inputLayoutId = R.id.input_per_game_async_compile,
+        dropdownId = R.id.dropdown_per_game_async_compile,
+        options = booleanOptions(),
+      ),
+      SettingField(
         key = "setting_use_dsp",
         inputLayoutId = R.id.input_per_game_use_dsp,
         dropdownId = R.id.dropdown_per_game_use_dsp,
@@ -283,7 +301,10 @@ class PerGameSettingsActivity : AppCompatActivity() {
       "setting_hrtf" -> prefs.getBoolean(key, false).toString()
       "setting_cache_shaders" -> prefs.getBoolean(key, true).toString()
       "setting_hard_fpu" -> prefs.getBoolean(key, true).toString()
-      "setting_skip_boot_anim" -> prefs.getBoolean(key, false).toString()
+      "setting_skip_boot_anim" -> prefs.getBoolean(key, true).toString()
+      "draw_reorder" -> prefs.getBoolean(key, true).toString()
+      "draw_merge" -> prefs.getBoolean(key, true).toString()
+      "async_compile" -> prefs.getBoolean(key, false).toString()
       "setting_audio_driver" -> prefs.getString(key, "openslES") ?: "openslES"
       "setting_network_enable" -> prefs.getBoolean(key, false).toString()
       "setting_gpu_driver" -> {

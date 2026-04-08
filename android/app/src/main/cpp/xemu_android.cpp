@@ -414,6 +414,24 @@ static bool GetPrefBool(JNIEnv* env, jobject activity, const char* key, bool def
   if (HasException(env, "getSharedPreferences") || !prefs) return defaultValue;
 
   jclass prefsClass = env->GetObjectClass(prefs);
+
+  // Check for per-game runtime override (stored as string "true"/"false")
+  jmethodID getStringMethod = env->GetMethodID(prefsClass, "getString",
+      "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;");
+  if (getStringMethod) {
+    std::string runtimeKeyStr = std::string("runtime_override_") + key;
+    jstring jRuntimeKey = env->NewStringUTF(runtimeKeyStr.c_str());
+    jstring override = static_cast<jstring>(
+        env->CallObjectMethod(prefs, getStringMethod, jRuntimeKey, nullptr));
+    env->DeleteLocalRef(jRuntimeKey);
+    if (!HasException(env, "SharedPreferences.getString") && override) {
+      std::string overrideStr = JStringToString(env, override);
+      env->DeleteLocalRef(override);
+      if (overrideStr == "true") return true;
+      if (overrideStr == "false") return false;
+    }
+  }
+
   jmethodID getBool = env->GetMethodID(prefsClass, "getBoolean", "(Ljava/lang/String;Z)Z");
   if (!getBool) return defaultValue;
 
@@ -539,16 +557,25 @@ struct SetupFiles {
   std::string eeprom;
   std::string config_path;
   std::string inline_aio_flag_path;
+  std::string audio_driver;  // SDL audio driver hint ("aaudio", "android", "dummy")
 };
 
 struct DisplaySettings {
   int surface_scale = 1;
+  int mem_limit_mib = 64;
   bool vsync = false;
   bool unlock_framerate = true;
   bool validation_layers = false;
+  bool skip_boot_anim = true;
+  bool fp_jit = true;
+  bool use_dsp = false;
+  bool hrtf = false;
+  bool cache_shaders = true;
+  bool net_enable = false;
   std::string renderer = "vulkan";
   std::string filtering = "nearest";
   std::string aspect_ratio = "fit";
+  std::string audio_driver = "aaudio";
 };
 
 static bool WriteConfigToml(const std::string& config_path,
@@ -595,6 +622,7 @@ static bool WriteConfigToml(const std::string& config_path,
   }
 
   general->insert_or_assign("show_welcome", false);
+  general->insert_or_assign("skip_boot_anim", ds.skip_boot_anim);
   display->insert_or_assign("renderer", ds.renderer);
   display->insert_or_assign("filtering", ds.filtering);
   display_window->insert_or_assign("vsync", ds.vsync);
@@ -615,9 +643,8 @@ static bool WriteConfigToml(const std::string& config_path,
   if (!audio_vp->contains("num_workers")) {
     audio_vp->insert_or_assign("num_workers", 0);
   }
-  if (!audio->contains("hrtf")) {
-    audio->insert_or_assign("hrtf", true);
-  }
+  audio->insert_or_assign("hrtf", ds.hrtf);
+  audio->insert_or_assign("use_dsp", ds.use_dsp);
   if (!audio->contains("volume_limit")) {
     audio->insert_or_assign("volume_limit", 1.0);
   }
@@ -631,11 +658,21 @@ static bool WriteConfigToml(const std::string& config_path,
     android->insert_or_assign("tcg_thread", "multi");
   }
   android->insert_or_assign("tcg_tb_size", tcg_tb_size);
+  android->insert_or_assign("audio_driver", ds.audio_driver);
 
   toml::table* perf = EnsureTable(tbl, "perf");
   if (perf) {
     perf->insert_or_assign("unlock_framerate", ds.unlock_framerate);
+    perf->insert_or_assign("fp_jit", ds.fp_jit);
+    perf->insert_or_assign("cache_shaders", ds.cache_shaders);
   }
+
+  toml::table* net = EnsureTable(tbl, "net");
+  if (net) {
+    net->insert_or_assign("enable", ds.net_enable);
+  }
+
+  sys->insert_or_assign("mem_limit", ds.mem_limit_mib);
 
   files->insert_or_assign("bootrom_path", mcpx);
   files->insert_or_assign("flashrom_path", flash);
@@ -791,7 +828,7 @@ static SetupFiles SyncSetupFiles() {
   }
 
   out.config_path = base + "/xemu.toml";
-  int tbSize = GetPrefInt(env, activity, "tcg_tb_size", 128);
+  int tbSize = GetPrefInt(env, activity, "tcg_tb_size", 256);
 
   DisplaySettings ds;
   ds.surface_scale = GetPrefInt(
@@ -804,13 +841,28 @@ static SetupFiles SyncSetupFiles() {
       GetPrefBool(env, activity, "vsync", false));
   ds.unlock_framerate = GetPrefBool(env, activity, "unlock_framerate", true);
   ds.validation_layers = GetPrefBool(env, activity, "validation_layers", false);
+  ds.skip_boot_anim = GetPrefBool(env, activity, "setting_skip_boot_anim", true);
+  ds.use_dsp = GetPrefBool(env, activity, "setting_use_dsp", false);
+  ds.hrtf = GetPrefBool(env, activity, "setting_hrtf",
+                         GetPrefBool(env, activity, "hrtf", false));
+  ds.cache_shaders = GetPrefBool(env, activity, "setting_cache_shaders", true);
+  ds.net_enable = GetPrefBool(env, activity, "setting_network_enable", false);
+  ds.mem_limit_mib = GetPrefInt(env, activity, "setting_system_memory_mib",
+                                 GetPrefInt(env, activity, "sys_mem_mib", 64));
+  {
+    std::string drv = GetPrefString(env, activity, "setting_audio_driver");
+    if (drv == "dummy") ds.audio_driver = "dummy";
+    else if (drv == "openslES") ds.audio_driver = "android";
+    else ds.audio_driver = "aaudio";  // default and explicit aaudio
+  }
 
   bool fp_safe = GetPrefBool(env, activity, "fp_safe", true);
   xemu_set_fp_safe(fp_safe);
   __android_log_print(ANDROID_LOG_INFO, "xemu-android",
                       "FP safe (native arithmetic): %s", fp_safe ? "ON" : "OFF");
 
-  bool fp_jit = GetPrefBool(env, activity, "fp_jit", true);
+  bool fp_jit = GetPrefBool(env, activity, "setting_hard_fpu",
+                             GetPrefBool(env, activity, "fp_jit", true));
   xemu_set_fp_jit(fp_jit);
   __android_log_print(ANDROID_LOG_INFO, "xemu-android",
                       "FP JIT (native storage + inline ops): %s", fp_jit ? "ON" : "OFF");
@@ -820,12 +872,12 @@ static SetupFiles SyncSetupFiles() {
   __android_log_print(ANDROID_LOG_INFO, "xemu-android",
                       "fast fences: %s", fast_fences ? "ON" : "OFF");
 
-  bool draw_reorder = GetPrefBool(env, activity, "draw_reorder", false);
+  bool draw_reorder = GetPrefBool(env, activity, "draw_reorder", true);
   xemu_set_draw_reorder(draw_reorder);
   __android_log_print(ANDROID_LOG_INFO, "xemu-android",
                       "draw reorder: %s", draw_reorder ? "ON" : "OFF");
 
-  bool draw_merge = GetPrefBool(env, activity, "draw_merge", false);
+  bool draw_merge = GetPrefBool(env, activity, "draw_merge", true);
   xemu_set_draw_merge(draw_merge);
   __android_log_print(ANDROID_LOG_INFO, "xemu-android",
                       "draw merge: %s", draw_merge ? "ON" : "OFF");
@@ -892,6 +944,8 @@ static SetupFiles SyncSetupFiles() {
   LogInfoFmt("Resolved hdd=%s", out.hdd.c_str());
   LogInfoFmt("Resolved dvd=%s", out.dvd.c_str());
   LogInfoFmt("Resolved eeprom=%s", out.eeprom.c_str());
+
+  out.audio_driver = ds.audio_driver;
 
   {
     FILE *f = fopen(out.config_path.c_str(), "r");
@@ -1093,6 +1147,15 @@ extern "C" int SDL_main(int argc, char* argv[]) {
   __android_log_print(ANDROID_LOG_INFO, "xemu-android",
                       "SyncSetupFiles took %u ms", t_sync_end - t_sync_start);
 
+  // Apply user's audio driver preference (overrides the default set above)
+  if (!setup.audio_driver.empty()) {
+    std::string hint = setup.audio_driver;
+    if (hint == "aaudio") hint = "aaudio,android";
+    SDL_SetHintWithPriority(SDL_HINT_AUDIODRIVER, hint.c_str(), SDL_HINT_OVERRIDE);
+    __android_log_print(ANDROID_LOG_INFO, "xemu-android",
+                        "audio driver hint: %s", hint.c_str());
+  }
+
   xemu_android_set_inline_aio_crash_flag_path(setup.inline_aio_flag_path.empty()
                                                    ? nullptr
                                                    : setup.inline_aio_flag_path.c_str());
@@ -1156,7 +1219,6 @@ extern "C" int SDL_main(int argc, char* argv[]) {
     }
     setenv("XEMU_ANDROID_FORCE_CPU_BLIT", "0", 1);
     g_config.general.show_welcome = false;
-    g_config.perf.cache_shaders = true;
 
     // Apply renderer preference from SharedPreferences
     {

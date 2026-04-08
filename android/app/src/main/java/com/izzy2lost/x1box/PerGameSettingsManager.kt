@@ -28,6 +28,9 @@ object PerGameSettingsManager {
     "setting_skip_boot_anim",
     "setting_audio_driver",
     "setting_network_enable",
+    "draw_reorder",
+    "draw_merge",
+    "async_compile",
   )
 
   fun hasOverrides(context: Context, relativePath: String): Boolean {

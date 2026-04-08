@@ -310,6 +310,9 @@ class SettingsActivity : AppCompatActivity() {
     val switchFpu         = findViewById<MaterialSwitch>(R.id.switch_hard_fpu)
     val switchVsync       = findViewById<MaterialSwitch>(R.id.switch_vsync)
     val switchSkipBootAnim = findViewById<MaterialSwitch>(R.id.switch_skip_boot_anim)
+    val switchDrawReorder  = findViewById<MaterialSwitch>(R.id.switch_draw_reorder)
+    val switchDrawMerge    = findViewById<MaterialSwitch>(R.id.switch_draw_merge)
+    val switchAsyncCompile = findViewById<MaterialSwitch>(R.id.switch_async_compile)
     switchDebugLogs      = findViewById(R.id.switch_debug_logs)
     val toggleAudioDriver = findViewById<MaterialButtonToggleGroup>(R.id.toggle_audio_driver)
     val btnSave           = findViewById<MaterialButton>(R.id.btn_settings_save)
@@ -424,7 +427,10 @@ class SettingsActivity : AppCompatActivity() {
     switchFpu.isChecked     = prefs.getBoolean("setting_hard_fpu", true)
     switchVsync.isChecked   = prefs.getBoolean("setting_vsync", false)
     switchSkipBootAnim.isChecked =
-      prefs.getBoolean("setting_skip_boot_anim", false)
+      prefs.getBoolean("setting_skip_boot_anim", true)
+    switchDrawReorder.isChecked  = prefs.getBoolean("draw_reorder", true)
+    switchDrawMerge.isChecked    = prefs.getBoolean("draw_merge", true)
+    switchAsyncCompile.isChecked = prefs.getBoolean("async_compile", false)
     switchDebugLogs.isChecked =
       prefs.getBoolean(DebugLog.PREF_ENABLED, false)
     switchNetworkEnable.isChecked =
@@ -517,6 +523,9 @@ class SettingsActivity : AppCompatActivity() {
         .putBoolean("setting_hard_fpu", switchFpu.isChecked)
         .putBoolean("setting_vsync", switchVsync.isChecked)
         .putBoolean("setting_skip_boot_anim", switchSkipBootAnim.isChecked)
+        .putBoolean("draw_reorder", switchDrawReorder.isChecked)
+        .putBoolean("draw_merge", switchDrawMerge.isChecked)
+        .putBoolean("async_compile", switchAsyncCompile.isChecked)
         .putBoolean(DebugLog.PREF_ENABLED, enableDebugLogs)
         .putBoolean("setting_network_enable", switchNetworkEnable.isChecked)
         .putString("setting_audio_driver", selectedAudioDriver)

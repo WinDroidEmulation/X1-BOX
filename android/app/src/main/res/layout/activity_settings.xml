@@ -454,6 +454,30 @@
             android:text="@string/settings_skip_boot_anim"
             android:textColor="@color/xemu_text_muted" />
 
+          <com.google.android.material.materialswitch.MaterialSwitch
+            android:id="@+id/switch_draw_reorder"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:text="@string/settings_draw_reorder"
+            android:textColor="@color/xemu_text_muted" />
+
+          <com.google.android.material.materialswitch.MaterialSwitch
+            android:id="@+id/switch_draw_merge"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:text="@string/settings_draw_merge"
+            android:textColor="@color/xemu_text_muted" />
+
+          <com.google.android.material.materialswitch.MaterialSwitch
+            android:id="@+id/switch_async_compile"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:text="@string/settings_async_compile"
+            android:textColor="@color/xemu_text_muted" />
+
           <!-- ── AUDIO ── -->
           <View
             android:layout_width="match_parent"

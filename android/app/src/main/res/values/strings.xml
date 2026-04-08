@@ -158,6 +158,9 @@
   <string name="settings_hard_fpu">Hardware FPU</string>
   <string name="settings_cache_shaders">Shader Cache</string>
   <string name="settings_skip_boot_anim">Skip startup animation</string>
+  <string name="settings_draw_reorder">Draw Call Reordering</string>
+  <string name="settings_draw_merge">Draw Call Merging</string>
+  <string name="settings_async_compile">Async Shader Compile</string>
 
   <string name="settings_section_audio">Audio</string>
   <string name="settings_use_dsp">Real-time DSP Processing</string>
