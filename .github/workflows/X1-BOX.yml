@@ -104,7 +104,7 @@ jobs:
 
       - name: Rename APK
         run: |
-          APK=$(find android/app/build/outputs/apk/release -name "*.apk" | head -n 1)
+          APK=$(find android/app/build/outputs/apk/release -name "*release*.apk" ! -name "*unsigned*" | head -n 1)
           mv "$APK" app.apk
           echo "APK=app.apk" >> $GITHUB_ENV
 
