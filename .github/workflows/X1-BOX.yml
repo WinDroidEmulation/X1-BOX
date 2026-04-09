@@ -54,15 +54,7 @@ jobs:
             python3-pip \
             python3-setuptools \
             curl \
-            unzip \
-            pngcrush \
-            optipng
-
-      - name: Compress PNG assets (SAFE)
-        run: |
-          echo "Compressing PNGs..."
-          find android/app/src/main/res -name "*.png" -exec pngcrush -ow {} \;
-          find android/app/src/main/res -name "*.png" -exec optipng -o7 {} \;
+            unzip
 
       - name: Install Rust (rustup + cargo)
         shell: bash
@@ -74,9 +66,6 @@ jobs:
           echo "$HOME/.cargo/bin" >> $GITHUB_PATH
           rustc --version
           cargo --version
-
-      - name: Set Rust optimization
-        run: echo "RUSTFLAGS=-C opt-level=3" >> $GITHUB_ENV
 
       - name: Add Rust Android target (arm64)
         shell: bash
@@ -151,24 +140,6 @@ jobs:
             echo "keyAlias=${{ secrets.ANDROID_KEY_ALIAS }}"
             echo "keyPassword=${{ secrets.ANDROID_KEY_PASSWORD }}"
           } > android/key.properties
-
-      - name: Apply size optimizations in build.gradle.kts
-        shell: bash
-        run: |
-          set -e
-          python3 - <<'PY'
-          from pathlib import Path
-          p = Path("android/app/build.gradle.kts")
-          s = p.read_text()
-
-          if "-O2" in s:
-              s = s.replace("-O2", "-O3 -DNDEBUG")
-
-          s = s.replace("--gc-sections\"", "--gc-sections,-s\"")
-
-          p.write_text(s)
-          print("O3 + DNDEBUG + STRIP APPLIED")
-          PY
 
       - name: Build Release APK
         working-directory: android
