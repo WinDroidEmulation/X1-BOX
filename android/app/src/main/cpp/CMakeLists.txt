@@ -76,6 +76,83 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(tomlplusplus)
 
+# --- libslirp (user-mode NAT networking) ---
+set(LIBSLIRP_GIT_REV "26be815b86e8d49add8c9a8b320239b9594ff03d")
+FetchContent_Declare(
+  libslirp
+  GIT_REPOSITORY "https://gitlab.freedesktop.org/slirp/libslirp.git"
+  GIT_TAG "${LIBSLIRP_GIT_REV}"
+  GIT_SHALLOW FALSE
+)
+FetchContent_GetProperties(libslirp)
+if(NOT libslirp_POPULATED)
+  if(POLICY CMP0169)
+    cmake_policy(PUSH)
+    cmake_policy(SET CMP0169 OLD)
+  endif()
+  FetchContent_Populate(libslirp)
+  if(POLICY CMP0169)
+    cmake_policy(POP)
+  endif()
+endif()
+
+set(LIBSLIRP_GENERATED_DIR "${CMAKE_BINARY_DIR}/libslirp-generated")
+file(MAKE_DIRECTORY "${LIBSLIRP_GENERATED_DIR}")
+file(STRINGS "${libslirp_SOURCE_DIR}/meson.build" LIBSLIRP_VERSION_LINE
+  REGEX "^[ ]*version : '[^']+'")
+if(NOT LIBSLIRP_VERSION_LINE)
+  message(FATAL_ERROR "Failed to determine libslirp version from meson.build")
+endif()
+string(REGEX REPLACE ".*version : '([^']+)'.*" "\\1"
+  LIBSLIRP_VERSION "${LIBSLIRP_VERSION_LINE}")
+string(REPLACE "." ";" LIBSLIRP_VERSION_COMPONENTS "${LIBSLIRP_VERSION}")
+list(LENGTH LIBSLIRP_VERSION_COMPONENTS LIBSLIRP_VERSION_COMPONENT_COUNT)
+if(NOT LIBSLIRP_VERSION_COMPONENT_COUNT EQUAL 3)
+  message(FATAL_ERROR "Unexpected libslirp version format: ${LIBSLIRP_VERSION}")
+endif()
+list(GET LIBSLIRP_VERSION_COMPONENTS 0 SLIRP_MAJOR_VERSION)
+list(GET LIBSLIRP_VERSION_COMPONENTS 1 SLIRP_MINOR_VERSION)
+list(GET LIBSLIRP_VERSION_COMPONENTS 2 SLIRP_MICRO_VERSION)
+set(SLIRP_VERSION_STRING "\"${LIBSLIRP_VERSION}\"")
+configure_file(
+  "${libslirp_SOURCE_DIR}/src/libslirp-version.h.in"
+  "${LIBSLIRP_GENERATED_DIR}/libslirp-version.h"
+  @ONLY
+)
+set(LIBSLIRP_SOURCES
+  "${libslirp_SOURCE_DIR}/src/arp_table.c"
+  "${libslirp_SOURCE_DIR}/src/bootp.c"
+  "${libslirp_SOURCE_DIR}/src/cksum.c"
+  "${libslirp_SOURCE_DIR}/src/dhcpv6.c"
+  "${libslirp_SOURCE_DIR}/src/dnssearch.c"
+  "${libslirp_SOURCE_DIR}/src/if.c"
+  "${libslirp_SOURCE_DIR}/src/ip6_icmp.c"
+  "${libslirp_SOURCE_DIR}/src/ip6_input.c"
+  "${libslirp_SOURCE_DIR}/src/ip6_output.c"
+  "${libslirp_SOURCE_DIR}/src/ip_icmp.c"
+  "${libslirp_SOURCE_DIR}/src/ip_input.c"
+  "${libslirp_SOURCE_DIR}/src/ip_output.c"
+  "${libslirp_SOURCE_DIR}/src/mbuf.c"
+  "${libslirp_SOURCE_DIR}/src/misc.c"
+  "${libslirp_SOURCE_DIR}/src/ncsi.c"
+  "${libslirp_SOURCE_DIR}/src/ndp_table.c"
+  "${libslirp_SOURCE_DIR}/src/sbuf.c"
+  "${libslirp_SOURCE_DIR}/src/slirp.c"
+  "${libslirp_SOURCE_DIR}/src/socket.c"
+  "${libslirp_SOURCE_DIR}/src/state.c"
+  "${libslirp_SOURCE_DIR}/src/stream.c"
+  "${libslirp_SOURCE_DIR}/src/tcp_input.c"
+  "${libslirp_SOURCE_DIR}/src/tcp_output.c"
+  "${libslirp_SOURCE_DIR}/src/tcp_subr.c"
+  "${libslirp_SOURCE_DIR}/src/tcp_timer.c"
+  "${libslirp_SOURCE_DIR}/src/tftp.c"
+  "${libslirp_SOURCE_DIR}/src/udp.c"
+  "${libslirp_SOURCE_DIR}/src/udp6.c"
+  "${libslirp_SOURCE_DIR}/src/util.c"
+  "${libslirp_SOURCE_DIR}/src/version.c"
+  "${libslirp_SOURCE_DIR}/src/vmstate.c"
+)
+
 # --- nv2a_vsh_cpu ---
 set(NV2A_VSH_CPU_GIT_REV "1115255708c10c4841b65dcd2223262e7a316598")
 set(nv2a_vsh_cpu_UNIT_TEST OFF CACHE BOOL "" FORCE)
@@ -517,7 +594,6 @@ list(FILTER XEMU_CORE_SOURCES EXCLUDE REGEX "ui[\\\\/]thirdparty[\\\\/]noc_file_
 list(FILTER XEMU_CORE_SOURCES EXCLUDE REGEX "ui[\\\\/]x_keymap\\.c$")
 list(FILTER XEMU_CORE_SOURCES EXCLUDE REGEX "ui[\\\\/]vdagent\\.c$")
 list(FILTER XEMU_CORE_SOURCES EXCLUDE REGEX "ui[\\\\/]xemu-os-utils-windows\\.c$")
-list(FILTER XEMU_CORE_SOURCES EXCLUDE REGEX "ui[\\\\/]xemu-net\\.c$")
 list(FILTER XEMU_CORE_SOURCES EXCLUDE REGEX "util[\\\\/]aio-win32\\.c$")
 list(FILTER XEMU_CORE_SOURCES EXCLUDE REGEX "util[\\\\/]atomic64\\.c$")
 list(FILTER XEMU_CORE_SOURCES EXCLUDE REGEX "util[\\\\/]coroutine-ucontext\\.c$")
@@ -550,7 +626,6 @@ list(FILTER XEMU_CORE_SOURCES EXCLUDE REGEX "net[\\\\/]af-xdp\\.c$")
 list(FILTER XEMU_CORE_SOURCES EXCLUDE REGEX "net[\\\\/]netmap\\.c$")
 list(FILTER XEMU_CORE_SOURCES EXCLUDE REGEX "net[\\\\/]pcap\\.c$")
 list(FILTER XEMU_CORE_SOURCES EXCLUDE REGEX "net[\\\\/]passt\\.c$")
-list(FILTER XEMU_CORE_SOURCES EXCLUDE REGEX "net[\\\\/]slirp\\.c$")
 list(FILTER XEMU_CORE_SOURCES EXCLUDE REGEX "net[\\\\/]tap-bsd\\.c$")
 list(FILTER XEMU_CORE_SOURCES EXCLUDE REGEX "net[\\\\/]tap-solaris\\.c$")
 list(FILTER XEMU_CORE_SOURCES EXCLUDE REGEX "net[\\\\/]tap-win32\\.c$")
@@ -654,7 +729,6 @@ list(APPEND XEMU_CORE_SOURCES
   "${CMAKE_CURRENT_LIST_DIR}/watchdog_stub.c"
   "${CMAKE_CURRENT_LIST_DIR}/async_teardown_stub.c"
   "${CMAKE_CURRENT_LIST_DIR}/block_export_stub.c"
-  "${CMAKE_CURRENT_LIST_DIR}/xemu_net_stub.c"
   "${CMAKE_CURRENT_LIST_DIR}/xemu_notifications_stub.c"
   "${CMAKE_CURRENT_LIST_DIR}/xemu_snapshots_stub.c"
   "${CMAKE_CURRENT_LIST_DIR}/xemu_hud_stub.c"
@@ -872,6 +946,7 @@ target_compile_definitions(xemu_core PRIVATE
   ANDROID
   __ANDROID__
   XBOX
+  CONFIG_SLIRP
   CONFIG_SDL
   CONFIG_OPENGL
   $<$<BOOL:${XEMU_ENABLE_VULKAN}>:CONFIG_VULKAN>
@@ -916,6 +991,8 @@ target_include_directories(xemu_core PRIVATE
   "${GLIB_INSTALL_DIR}/include/glib-2.0"
   "${GLIB_INSTALL_DIR}/lib/glib-2.0/include"
   "${tomlplusplus_SOURCE_DIR}/include"
+  "${libslirp_SOURCE_DIR}/src"
+  "${LIBSLIRP_GENERATED_DIR}"
   $<$<BOOL:${XEMU_ENABLE_VULKAN}>:${glslang_SOURCE_DIR}>
   $<$<BOOL:${XEMU_ENABLE_VULKAN}>:${spirv_reflect_SOURCE_DIR}>
   $<$<BOOL:${XEMU_ENABLE_VULKAN}>:${vma_SOURCE_DIR}/include>
@@ -958,6 +1035,32 @@ add_library(gthread-2.0 STATIC IMPORTED)
 set_target_properties(gthread-2.0 PROPERTIES
   IMPORTED_LOCATION "${GLIB_INSTALL_DIR}/lib/libgthread-2.0.a"
 )
+
+add_library(slirp_static STATIC
+  ${LIBSLIRP_SOURCES}
+)
+set_target_properties(slirp_static PROPERTIES
+  POSITION_INDEPENDENT_CODE ON
+)
+target_compile_definitions(slirp_static PRIVATE
+  BUILDING_LIBSLIRP
+  G_LOG_DOMAIN="Slirp"
+  GLIB_STATIC_COMPILATION
+  GIO_STATIC_COMPILATION
+  GMODULE_STATIC_COMPILATION
+  GI_STATIC_COMPILATION
+  GOBJECT_STATIC_COMPILATION
+)
+target_include_directories(slirp_static PRIVATE
+  "${libslirp_SOURCE_DIR}/src"
+  "${LIBSLIRP_GENERATED_DIR}"
+  "${GLIB_INSTALL_DIR}/include/glib-2.0"
+  "${GLIB_INSTALL_DIR}/lib/glib-2.0/include"
+)
+target_link_libraries(slirp_static PRIVATE
+  glib-2.0
+)
+add_dependencies(slirp_static glib_ep)
 
 add_library(xemu SHARED
   xemu_android.cpp
@@ -1025,6 +1128,7 @@ endif()
 
 target_link_libraries(xemu PRIVATE
   xemu_core
+  slirp_static
   iconv_stub
   glib-2.0
   gobject-2.0

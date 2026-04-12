@@ -260,22 +260,8 @@ class GameLibraryActivity : AppCompatActivity() {
       return
     }
 
-    resolveConfiguredLocalHddFile()?.let { hddFile ->
-      runCatching { XboxInsigniaHelper.inspectDashboard(hddFile) }
-        .getOrNull()
-        ?.let { dashboardStatus ->
-          if (!dashboardStatus.looksRetailDashboardInstalled) {
-            val messageRes = if (dashboardStatus.hasAnyRetailDashboardFiles) {
-              R.string.library_boot_dashboard_incomplete_retail
-            } else {
-              R.string.library_boot_dashboard_missing_retail
-            }
-            Toast.makeText(this, getString(messageRes), Toast.LENGTH_LONG).show()
-            return
-          }
-        }
-    }
-
+    // Custom dashboards can boot from an xboxdash.xbe alias even when the HDD
+    // does not look like a stock retail dashboard, so don't gate launch here.
     // MainActivity runs in :xemu, so the disc selection must be flushed before
     // the other process reads SharedPreferences during startup.
     val launchEditor = prefs.edit()
