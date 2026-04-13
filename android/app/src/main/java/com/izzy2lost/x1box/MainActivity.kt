@@ -146,9 +146,11 @@ class MainActivity : SDLActivity(), InputManager.InputDeviceListener {
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
     DebugLog.initialize(this)
-    val rendererPref = getSharedPreferences("x1box_prefs", Context.MODE_PRIVATE)
-      .getString("setting_renderer", "vulkan") ?: "vulkan"
-    nativeSetenv("XEMU_RENDERER", rendererPref)
+    val prefs = getSharedPreferences("x1box_prefs", Context.MODE_PRIVATE)
+    val rendererPref = PerGameSettingsManager.getRuntimeOverride(this, "setting_renderer")
+      ?: prefs.getString("setting_renderer", "vulkan")
+      ?: "vulkan"
+    nativeSetenv("XEMU_RENDERER", if (rendererPref == "opengl") "opengl" else "vulkan")
     OrientationLocker(this, landscapeOnly = true).enable()
     window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
     val requestedSlot = intent?.getIntExtra(EXTRA_AUTO_LOAD_SNAPSHOT_SLOT, 0) ?: 0
@@ -483,8 +485,6 @@ class MainActivity : SDLActivity(), InputManager.InputDeviceListener {
 
   override fun onDestroy() {
     DebugLog.i(TAG) { "onDestroy()" }
-    val shouldReturnToLibrary =
-      pendingCloseAction == PendingCloseAction.RETURN_TO_LIBRARY && !isChangingConfigurations
     pendingCloseAction = PendingCloseAction.NONE
     fpsHandler.removeCallbacks(fpsRunnable)
     swipeUpGestureRecognizer.reset()
@@ -492,21 +492,8 @@ class MainActivity : SDLActivity(), InputManager.InputDeviceListener {
     inGameMenuDialog?.dismiss()
     inGameMenuDialog = null
 
-    // Unregister virtual controller
-    try {
-      org.libsdl.app.SDLControllerManager.nativeRemoveJoystick(-2)
-    } catch (e: Exception) {
-      DebugLog.e("MainActivity", e) { "Failed to unregister virtual controller: ${e.message}" }
-    }
-    
     inputManager?.unregisterInputDeviceListener(this)
     window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-    if (shouldReturnToLibrary) {
-      val intent = Intent(this, GameLibraryActivity::class.java).apply {
-        addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
-      }
-      startActivity(intent)
-    }
     super.onDestroy()
   }
 
@@ -601,6 +588,7 @@ class MainActivity : SDLActivity(), InputManager.InputDeviceListener {
   private external fun nativeGetFps(): Int
   private external fun nativePauseEmulation()
   private external fun nativeResumeEmulation()
+  private external fun nativeSetReturnToLibraryOnExit(enable: Boolean)
   private external fun nativeExitEmulation()
 
   private fun slotName(slot: Int) = "android_slot_$slot"
@@ -1077,6 +1065,21 @@ class MainActivity : SDLActivity(), InputManager.InputDeviceListener {
       return
     }
     pendingCloseAction = action
+    nativeSetReturnToLibraryOnExit(action == PendingCloseAction.RETURN_TO_LIBRARY)
+    if (action == PendingCloseAction.RETURN_TO_LIBRARY) {
+      // Launch the library activity in a fresh task BEFORE tearing down the
+      // emulator. The native side calls _exit() once QEMU stops, which kills
+      // this process — Android will then bring the already-queued
+      // GameLibraryActivity to the foreground in its own process.
+      val intent = Intent(applicationContext, GameLibraryActivity::class.java).apply {
+        addFlags(
+          Intent.FLAG_ACTIVITY_NEW_TASK or
+            Intent.FLAG_ACTIVITY_CLEAR_TOP or
+            Intent.FLAG_ACTIVITY_SINGLE_TOP
+        )
+      }
+      applicationContext.startActivity(intent)
+    }
     nativeExitEmulation()
     if (action == PendingCloseAction.QUIT_APP) {
       moveTaskToBack(true)

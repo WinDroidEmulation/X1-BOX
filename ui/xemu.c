@@ -132,12 +132,16 @@ static bool g_android_gl_bgra_supported = true;
 static bool g_android_force_finish_before_swap = false;
 static bool g_android_paused = false;
 static bool g_android_should_quit = false;
+static volatile bool g_android_qemu_thread_finished = false;
 static volatile bool g_android_vm_pause_requested = false;
 static volatile bool g_android_vm_resume_requested = false;
 static uint64_t g_android_frame_counter = 0;
+static uint64_t g_android_last_hw_frame = 0;
 static int g_android_target_fps = 60;
 static int64_t g_android_frame_interval_ns = 16666666;
 static int g_android_display_mode = 0; /* 0=stretch, 1=4:3, 2=16:9 */
+static GLuint g_android_last_hw_tex = 0;
+static bool g_android_last_hw_flip = false;
 
 static bool sdl2_is_render_thread(void)
 {
@@ -198,6 +202,11 @@ void xemu_android_request_exit(void)
 {
     g_android_should_quit = true;
     qemu_system_shutdown_request(SHUTDOWN_CAUSE_HOST_UI);
+}
+
+void xemu_android_set_qemu_thread_finished(bool finished)
+{
+    g_android_qemu_thread_finished = finished;
 }
 
 static void xemu_android_refresh_frame_limit_from_env(void)
@@ -1388,8 +1397,24 @@ void xemu_android_display_loop(void)
     qemu_mutex_unlock_main_loop();
 
     while (1) {
-        if (g_android_should_quit || qemu_shutdown_requested_get() != SHUTDOWN_CAUSE_NONE) {
+        if (g_android_qemu_thread_finished) {
             break;
+        }
+        if (g_android_should_quit ||
+            qemu_shutdown_requested_get() != SHUTDOWN_CAUSE_NONE) {
+            if ((g_android_frame_counter++ % 120) == 0) {
+                __android_log_print(ANDROID_LOG_INFO, "xemu-android",
+                                    "display loop draining during shutdown: paused=%d hidden=%d",
+                                    g_android_paused ? 1 : 0,
+                                    sdl2_console[0].hidden ? 1 : 0);
+            }
+            qemu_mutex_lock_main_loop();
+            bql_lock();
+            sdl2_poll_events(&sdl2_console[0]);
+            bql_unlock();
+            qemu_mutex_unlock_main_loop();
+            SDL_Delay(16);
+            continue;
         }
         if (g_android_vm_pause_requested) {
             qemu_mutex_lock_main_loop();
@@ -1652,6 +1677,11 @@ void sdl2_gl_refresh(DisplayChangeListener *dcl)
         }
         tex = 0;
     }
+    if (tex != 0) {
+        g_android_last_hw_tex = tex;
+        g_android_last_hw_flip = flip_required;
+        g_android_last_hw_frame = g_android_frame_counter;
+    }
 #endif
 #ifdef __ANDROID__
     android_log_gl_error("refresh-get-fb");
@@ -1668,26 +1698,48 @@ void sdl2_gl_refresh(DisplayChangeListener *dcl)
     }
 #endif
     if (tex == 0) {
+        bool use_surface_fallback = true;
 #ifdef __ANDROID__
-        // Ensure the software VGA path updates the surface before uploading.
-        qemu_mutex_lock_main_loop();
-        bql_lock();
-        graphic_hw_update(scon->dcl.con);
-        bql_unlock();
-        qemu_mutex_unlock_main_loop();
-#endif
-        // FIXME: Don't upload if notdirty
-        xb_surface_gl_create_texture(scon->surface);
-        scon->updates++;
-        tex = scon->surface->texture;
-        flip_required = true;
-#ifdef __ANDROID__
-        if ((g_android_frame_counter % 120) == 0) {
-            __android_log_print(ANDROID_LOG_INFO, "xemu-android",
-                                "refresh no nv2a fb, using surface texture=%u",
-                                (unsigned)tex);
+        const bool hold_last_hw_frame =
+            !g_config.general.skip_boot_anim &&
+            g_android_last_hw_tex != 0 &&
+            g_android_last_hw_frame != 0 &&
+            g_android_frame_counter < 1200 &&
+            (g_android_frame_counter - g_android_last_hw_frame) <= 360 &&
+            glIsTexture(g_android_last_hw_tex) == GL_TRUE;
+        if (hold_last_hw_frame) {
+            tex = g_android_last_hw_tex;
+            flip_required = g_android_last_hw_flip;
+            use_surface_fallback = false;
+            if ((g_android_frame_counter % 120) == 0) {
+                __android_log_print(ANDROID_LOG_INFO, "xemu-android",
+                                    "refresh: holding last hw texture=%u during boot transition",
+                                    (unsigned)tex);
+            }
+        }
+        if (use_surface_fallback) {
+            // Ensure the software VGA path updates the surface before uploading.
+            qemu_mutex_lock_main_loop();
+            bql_lock();
+            graphic_hw_update(scon->dcl.con);
+            bql_unlock();
+            qemu_mutex_unlock_main_loop();
         }
 #endif
+        if (use_surface_fallback) {
+            // FIXME: Don't upload if notdirty
+            xb_surface_gl_create_texture(scon->surface);
+            scon->updates++;
+            tex = scon->surface->texture;
+            flip_required = true;
+#ifdef __ANDROID__
+            if ((g_android_frame_counter % 120) == 0) {
+                __android_log_print(ANDROID_LOG_INFO, "xemu-android",
+                                    "refresh no nv2a fb, using surface texture=%u",
+                                    (unsigned)tex);
+            }
+#endif
+        }
     }
 #ifdef __ANDROID__
     android_log_gl_error("refresh-create-texture");
