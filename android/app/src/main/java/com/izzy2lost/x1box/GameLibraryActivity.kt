@@ -1,7 +1,7 @@
 package com.izzy2lost.x1box
 
-import android.content.Intent
 import android.content.res.Configuration
+import android.content.Intent
 import android.graphics.Bitmap
 import android.net.Uri
 import android.os.Bundle
@@ -34,12 +34,15 @@ import java.io.FileOutputStream
 import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
+import java.net.HttpURLConnection
+import java.net.URL
 import java.net.URLEncoder
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.util.ArrayDeque
 import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.Executors
 
 class GameLibraryActivity : AppCompatActivity() {
   companion object {
@@ -100,12 +103,14 @@ class GameLibraryActivity : AppCompatActivity() {
   private val coverRepoBaseUrl = "https://raw.githubusercontent.com/izzy2lost/X1_Covers/main/"
   private val boxArtCache = ConcurrentHashMap<String, String>()
   private val boxArtMisses = ConcurrentHashMap.newKeySet<String>()
+  private val persistedCoverWrites = ConcurrentHashMap.newKeySet<String>()
   private val coverIndex = ConcurrentHashMap<String, String>()
   private val coverCollapsedIndex = ConcurrentHashMap<String, String>()
   private val coverEntries = ArrayList<CoverEntry>()
   private val coverIndexLock = Any()
   private val discFormatCacheLock = Any()
   private val discFormatCache = HashMap<String, DiscImageFormat>()
+  private val coverPersistenceExecutor = Executors.newSingleThreadExecutor()
   @Volatile private var coverIndexLoaded = false
   @Volatile private var discFormatCacheLoaded = false
   @Volatile private var discFormatCacheDirty = false
@@ -224,6 +229,11 @@ class GameLibraryActivity : AppCompatActivity() {
     OrientationLocker(this).enable()
   }
 
+  override fun onDestroy() {
+    super.onDestroy()
+    coverPersistenceExecutor.shutdownNow()
+  }
+
   private fun tryRestartLastGameFromIntent(): Boolean {
     if (!intent.getBooleanExtra(EXTRA_RESTART_LAST_GAME, false)) {
       return false
@@ -260,22 +270,8 @@ class GameLibraryActivity : AppCompatActivity() {
       return
     }
 
-    resolveConfiguredLocalHddFile()?.let { hddFile ->
-      runCatching { XboxInsigniaHelper.inspectDashboard(hddFile) }
-        .getOrNull()
-        ?.let { dashboardStatus ->
-          if (!dashboardStatus.looksRetailDashboardInstalled) {
-            val messageRes = if (dashboardStatus.hasAnyRetailDashboardFiles) {
-              R.string.library_boot_dashboard_incomplete_retail
-            } else {
-              R.string.library_boot_dashboard_missing_retail
-            }
-            Toast.makeText(this, getString(messageRes), Toast.LENGTH_LONG).show()
-            return
-          }
-        }
-    }
-
+    // Custom dashboards can boot from an xboxdash.xbe alias even when the HDD
+    // does not look like a stock retail dashboard, so don't gate launch here.
     // MainActivity runs in :xemu, so the disc selection must be flushed before
     // the other process reads SharedPreferences during startup.
     val launchEditor = prefs.edit()
@@ -707,25 +703,32 @@ class GameLibraryActivity : AppCompatActivity() {
       return
     }
 
+    val key = normalizeCoverKey(game.title)
+    val persistedFile = getPersistedCoverFile(key)
+    if (persistedFile.exists() && persistedFile.length() > 0L) {
+      loadCoverArtIntoView(coverView, persistedFile)
+      return
+    }
+
     if (!boxArtLookupEnabled) {
       return
     }
 
-    val key = normalizeCoverKey(game.title)
     val cachedUrl = boxArtCache[key]
     if (cachedUrl != null) {
-      applyBoxArtToView(coverView, cachedUrl)
+      applyBoxArtToView(coverView, key, cachedUrl)
       return
     }
 
     val url = lookupBoxArtUrl(game.title) ?: return
     boxArtCache[key] = url
     if (coverView.tag == game.uri.toString()) {
-      applyBoxArtToView(coverView, url)
+      applyBoxArtToView(coverView, key, url)
     }
   }
 
-  private fun applyBoxArtToView(coverView: ImageView, url: String) {
+  private fun applyBoxArtToView(coverView: ImageView, key: String, url: String) {
+    persistDownloadedCoverAsync(key, url)
     loadCoverArtIntoView(coverView, url)
   }
 
@@ -755,6 +758,71 @@ class GameLibraryActivity : AppCompatActivity() {
     }
     coverView.setBackgroundResource(backgroundRes)
     coverView.setImageResource(R.drawable.ic_xemu_image_placeholder)
+  }
+
+  private fun persistedCoversDir(): File = File(filesDir, "downloaded_covers")
+
+  private fun getPersistedCoverFile(coverKey: String): File {
+    val collapsed = collapseCoverKey(coverKey)
+    val fileName = if (collapsed.isNotEmpty()) {
+      collapsed
+    } else {
+      "cover_" + Integer.toHexString(coverKey.hashCode())
+    }
+    return File(persistedCoversDir(), "$fileName.png")
+  }
+
+  private fun persistDownloadedCoverAsync(coverKey: String, url: String) {
+    val target = getPersistedCoverFile(coverKey)
+    if ((target.exists() && target.length() > 0L) || !persistedCoverWrites.add(coverKey)) {
+      return
+    }
+
+    try {
+      coverPersistenceExecutor.execute {
+        var connection: HttpURLConnection? = null
+        try {
+          val dir = persistedCoversDir()
+          if (!dir.exists() && !dir.mkdirs()) {
+            return@execute
+          }
+
+          val tempFile = File(dir, "${target.name}.tmp")
+          connection = URL(url).openConnection() as? HttpURLConnection
+          connection?.connectTimeout = 5000
+          connection?.readTimeout = 10000
+          connection?.instanceFollowRedirects = true
+          connection?.connect()
+          val source = connection?.inputStream ?: URL(url).openStream()
+          source.use { input ->
+            FileOutputStream(tempFile).use { output ->
+              input.copyTo(output)
+            }
+          }
+          if (tempFile.length() <= 0L) {
+            tempFile.delete()
+            return@execute
+          }
+          if (target.exists()) {
+            target.delete()
+          }
+          if (!tempFile.renameTo(target)) {
+            FileInputStream(tempFile).use { input ->
+              FileOutputStream(target).use { output ->
+                input.copyTo(output)
+              }
+            }
+            tempFile.delete()
+          }
+        } catch (_: IOException) {
+        } finally {
+          connection?.disconnect()
+          persistedCoverWrites.remove(coverKey)
+        }
+      }
+    } catch (_: RuntimeException) {
+      persistedCoverWrites.remove(coverKey)
+    }
   }
 
   private fun lookupBoxArtUrl(title: String): String? {

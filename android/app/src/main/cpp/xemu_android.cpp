@@ -10,6 +10,7 @@
 #include <android/asset_manager_jni.h>
 #include <jni.h>
 
+#include <atomic>
 #include <climits>
 #include <cinttypes>
 #include <cstdio>
@@ -52,6 +53,7 @@ extern "C" bool runstate_is_running(void);
 extern "C" void xemu_android_pause_emulation(void);
 extern "C" void xemu_android_resume_emulation(void);
 extern "C" void xemu_android_request_exit(void);
+extern "C" void xemu_android_set_qemu_thread_finished(bool finished);
 extern "C" void xemu_android_set_display_mode_setting(int mode);
 
 extern "C" bool xemu_android_is_debug_logging_enabled(void)
@@ -98,6 +100,7 @@ extern "C" bool xemu_android_vulkan_custom_driver_zip_loaded(void)
 #endif
 
 static int g_dvd_fd = -1;
+static std::atomic_bool g_return_to_library_on_exit{false};
 
 namespace {
 constexpr const char* kLogTag = "xemu-android";
@@ -370,6 +373,19 @@ static std::string GetPrefString(JNIEnv* env, jobject activity, const char* key)
       prefsClass, "getString", "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;");
   if (!getString) return {};
 
+  std::string runtimeKeyStr = std::string("runtime_override_") + key;
+  jstring jRuntimeKey = env->NewStringUTF(runtimeKeyStr.c_str());
+  jstring runtimeValue = static_cast<jstring>(
+      env->CallObjectMethod(prefs, getString, jRuntimeKey, nullptr));
+  env->DeleteLocalRef(jRuntimeKey);
+  if (!HasException(env, "SharedPreferences.getString") && runtimeValue) {
+    std::string override = JStringToString(env, runtimeValue);
+    env->DeleteLocalRef(runtimeValue);
+    if (!override.empty()) {
+      return override;
+    }
+  }
+
   jstring jkey = env->NewStringUTF(key);
   jstring jdefault = nullptr;
   jstring value = static_cast<jstring>(env->CallObjectMethod(prefs, getString, jkey, jdefault));
@@ -392,6 +408,27 @@ static int GetPrefInt(JNIEnv* env, jobject activity, const char* key, int defaul
   if (HasException(env, "getSharedPreferences") || !prefs) return defaultValue;
 
   jclass prefsClass = env->GetObjectClass(prefs);
+  jmethodID getString = env->GetMethodID(
+      prefsClass, "getString", "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;");
+  if (getString) {
+    std::string runtimeKeyStr = std::string("runtime_override_") + key;
+    jstring jRuntimeKey = env->NewStringUTF(runtimeKeyStr.c_str());
+    jstring runtimeValue = static_cast<jstring>(
+        env->CallObjectMethod(prefs, getString, jRuntimeKey, nullptr));
+    env->DeleteLocalRef(jRuntimeKey);
+    if (!HasException(env, "SharedPreferences.getString") && runtimeValue) {
+      std::string override = JStringToString(env, runtimeValue);
+      env->DeleteLocalRef(runtimeValue);
+      if (!override.empty()) {
+        char* end = nullptr;
+        long parsed = strtol(override.c_str(), &end, 10);
+        if (end && *end == '\0') {
+          return static_cast<int>(parsed);
+        }
+      }
+    }
+  }
+
   jmethodID getInt = env->GetMethodID(prefsClass, "getInt", "(Ljava/lang/String;I)I");
   if (!getInt) return defaultValue;
 
@@ -575,6 +612,7 @@ struct DisplaySettings {
   std::string renderer = "vulkan";
   std::string filtering = "nearest";
   std::string aspect_ratio = "fit";
+  std::string tcg_thread = "multi";
   std::string audio_driver = "aaudio";
 };
 
@@ -654,9 +692,8 @@ static bool WriteConfigToml(const std::string& config_path,
   if (!android->contains("tcg_tuning")) {
     android->insert_or_assign("tcg_tuning", true);
   }
-  if (!android->contains("tcg_thread")) {
-    android->insert_or_assign("tcg_thread", "multi");
-  }
+  android->insert_or_assign("tcg_thread",
+                            ds.tcg_thread == "single" ? "single" : "multi");
   android->insert_or_assign("tcg_tb_size", tcg_tb_size);
   android->insert_or_assign("audio_driver", ds.audio_driver);
 
@@ -670,9 +707,10 @@ static bool WriteConfigToml(const std::string& config_path,
   toml::table* net = EnsureTable(tbl, "net");
   if (net) {
     net->insert_or_assign("enable", ds.net_enable);
+    net->insert_or_assign("backend", "nat");
   }
 
-  sys->insert_or_assign("mem_limit", ds.mem_limit_mib);
+  sys->insert_or_assign("mem_limit", ds.mem_limit_mib == 128 ? "128" : "64");
 
   files->insert_or_assign("bootrom_path", mcpx);
   files->insert_or_assign("flashrom_path", flash);
@@ -850,6 +888,13 @@ static SetupFiles SyncSetupFiles() {
   ds.mem_limit_mib = GetPrefInt(env, activity, "setting_system_memory_mib",
                                  GetPrefInt(env, activity, "sys_mem_mib", 64));
   {
+    std::string thread = GetPrefString(env, activity, "setting_tcg_thread");
+    if (thread.empty()) {
+      thread = GetPrefString(env, activity, "tcg_thread");
+    }
+    ds.tcg_thread = thread == "single" ? "single" : "multi";
+  }
+  {
     std::string drv = GetPrefString(env, activity, "setting_audio_driver");
     if (drv == "dummy") ds.audio_driver = "dummy";
     else if (drv == "openslES") ds.audio_driver = "android";
@@ -863,6 +908,7 @@ static SetupFiles SyncSetupFiles() {
 
   bool fp_jit = GetPrefBool(env, activity, "setting_hard_fpu",
                              GetPrefBool(env, activity, "fp_jit", true));
+  ds.fp_jit = fp_jit;
   xemu_set_fp_jit(fp_jit);
   __android_log_print(ANDROID_LOG_INFO, "xemu-android",
                       "FP JIT (native storage + inline ops): %s", fp_jit ? "ON" : "OFF");
@@ -1029,10 +1075,13 @@ static int SDLCALL QemuThreadMain(void* data) {
   xemu_pin_to_big_cores_cpp("qemu_cpu_thread");
 #endif
   auto* ctx = static_cast<QemuLaunchContext*>(data);
+  xemu_android_set_qemu_thread_finished(false);
   LogInfoInt("QemuThreadMain: show_welcome=%d", g_config.general.show_welcome ? 1 : 0);
   LogInfoFmt("QemuThreadMain: bootrom=%s", g_config.sys.files.bootrom_path ? g_config.sys.files.bootrom_path : "(null)");
   LogInfo("QemuThreadMain: starting");
-  return xemu_android_main(ctx->argc, ctx->argv);
+  const int rc = xemu_android_main(ctx->argc, ctx->argv);
+  xemu_android_set_qemu_thread_finished(true);
+  return rc;
 }
 
 #ifndef XEMU_OPT_TB_CACHE_HINTS
@@ -1220,19 +1269,22 @@ extern "C" int SDL_main(int argc, char* argv[]) {
     setenv("XEMU_ANDROID_FORCE_CPU_BLIT", "0", 1);
     g_config.general.show_welcome = false;
 
-    // Apply renderer preference from SharedPreferences
+    // Apply the early renderer selection from activity prefs/runtime overrides.
     {
       const char *renderer_pref = SDL_getenv("XEMU_RENDERER");
       if (renderer_pref && strcmp(renderer_pref, "opengl") == 0) {
         g_config.display.renderer = CONFIG_DISPLAY_RENDERER_OPENGL;
-        LogInfo("Renderer override: OpenGL ES (from pref)");
-      } else {
+        LogInfo("Renderer override: OpenGL ES");
+      } else if (renderer_pref && strcmp(renderer_pref, "vulkan") == 0) {
         g_config.display.renderer = CONFIG_DISPLAY_RENDERER_VULKAN;
+        LogInfo("Renderer override: Vulkan");
       }
     }
 
     LogInfoInt("Config final show_welcome=%d", g_config.general.show_welcome ? 1 : 0);
+    LogInfoInt("Config final skip_boot_anim=%d", g_config.general.skip_boot_anim ? 1 : 0);
     LogInfoInt("Config final cache_shaders=%d", g_config.perf.cache_shaders ? 1 : 0);
+    LogInfoInt("Config final fp_jit=%d", g_config.perf.fp_jit ? 1 : 0);
     LogInfoInt("Config final renderer=%d", (int)g_config.display.renderer);
     LogInfoFmt("Config final bootrom=%s", g_config.sys.files.bootrom_path ? g_config.sys.files.bootrom_path : "(null)");
     LogInfoFmt("Config final flashrom=%s", g_config.sys.files.flashrom_path ? g_config.sys.files.flashrom_path : "(null)");
@@ -1286,6 +1338,7 @@ extern "C" int SDL_main(int argc, char* argv[]) {
       return 1;
     }
     LogInfo("SDL_main: qemu thread started");
+    xemu_android_set_qemu_thread_finished(false);
     xemu_android_display_wait_ready();
     LogInfo("SDL_main: display ready, entering render loop");
     xemu_android_display_loop();
@@ -1295,6 +1348,15 @@ extern "C" int SDL_main(int argc, char* argv[]) {
     SDL_WaitThread(qemu_thread, &qemu_rc);
     LogInfoInt("SDL_main: QEMU thread exited with %d", qemu_rc);
 
+    /* Always terminate the process on exit. Returning from SDL_main and
+     * letting the JVM/SDL lifecycle tear down in-process is racy on Android:
+     * window focus / surface callbacks can fire after SDL's event-queue
+     * mutex has been destroyed, which aborts with
+     * "pthread_mutex_lock called on a destroyed mutex". For the
+     * "return to game library" path, MainActivity launches
+     * GameLibraryActivity in a new task *before* calling into native, so
+     * Android respawns the library UI once this process dies. */
+    (void)g_return_to_library_on_exit.exchange(false);
     LogInfo("SDL_main: QEMU cleanup complete, terminating process");
     _exit(qemu_rc);
   }
@@ -1554,6 +1616,13 @@ extern "C" JNIEXPORT void JNICALL
 Java_com_izzy2lost_x1box_MainActivity_nativeResumeEmulation(JNIEnv *, jobject)
 {
     xemu_android_resume_emulation();
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_izzy2lost_x1box_MainActivity_nativeSetReturnToLibraryOnExit(
+    JNIEnv *, jobject, jboolean enable)
+{
+    g_return_to_library_on_exit.store(enable == JNI_TRUE);
 }
 
 extern "C" JNIEXPORT void JNICALL
